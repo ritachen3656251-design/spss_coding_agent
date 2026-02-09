@@ -2,6 +2,7 @@
 SPSS Agent System - 智能问卷编码系统
 完整流程：SAV → CSV → 预处理 → 智能打分 → 质量检查 → 分析报告
 """
+import argparse
 import os
 
 import config
@@ -11,10 +12,27 @@ from tools.data_converter import find_and_convert_sav_to_questionnaire
 
 
 def main():
-    """
-    完整的 Agent 工作流：
-    SAV → CSV → 预处理 → 智能打分 → 质量检查 → 分析报告
-    """
+    parser = argparse.ArgumentParser(description="SPSS Agent System")
+    parser.add_argument(
+        "--async",
+        dest="use_async",
+        action="store_true",
+        help="使用异步处理模式",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        default=True,
+        help="从断点继续（默认开启）",
+    )
+    parser.add_argument(
+        "--no-resume",
+        dest="resume",
+        action="store_false",
+        help="忽略断点，重新开始",
+    )
+    args = parser.parse_args()
+
     print("=" * 60)
     print("🤖 SPSS Agent System - 智能问卷编码系统")
     print("=" * 60)
@@ -73,6 +91,8 @@ def main():
     result_df = pipeline.process_csv(
         input_csv=input_file,
         output_csv=output_csv,
+        use_async=args.use_async,
+        resume=args.resume,
     )
 
     print("\n" + "=" * 60)
@@ -101,9 +121,10 @@ def main():
         if needs_review > 0:
             print(f"\n⚠️  有 {needs_review} 条数据需要人工复核")
 
-    print("\n💾 保存 Agent 记忆...")
+    print("\n💾 保存 Agent 记忆与知识库...")
     pipeline.scoring_agent.memory.save_long_term()
-    print("✓ 记忆已保存，将用于优化未来处理")
+    pipeline.scoring_agent.save_knowledge()
+    print("✓ 记忆与知识库已保存，将用于优化未来处理")
 
 
 if __name__ == "__main__":

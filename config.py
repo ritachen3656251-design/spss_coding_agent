@@ -25,6 +25,19 @@ ENABLE_KEYWORD_FALLBACK = True  # 是否启用关键词回退策略
 ENABLE_REACT = True  # 是否启用 ReAct 循环（思考→行动→观察→检查）
 REACT_CONFIDENCE_TARGET = 0.8  # ReAct 循环满意阈值
 REACT_MAX_ITERATIONS = 3  # ReAct 最大迭代次数
+# 异步处理配置
+USE_ASYNC_PROCESSING = (
+    os.getenv("USE_ASYNC_PROCESSING", "false").lower() == "true"
+)
+ASYNC_CONCURRENCY = int(os.getenv("ASYNC_CONCURRENCY", "5"))  # 并发数
+ASYNC_RATE_LIMIT_DELAY = float(
+    os.getenv("ASYNC_RATE_LIMIT_DELAY", "0.1")
+)  # 请求间隔（秒）
+
+# 断点续传
+ENABLE_CHECKPOINT = (
+    os.getenv("ENABLE_CHECKPOINT", "true").lower() == "true"
+)
 
 # 评分配置
 SCORE_OPTIONS = [0, 1, 2, 999]

@@ -2,8 +2,10 @@
 智能打分 Agent：记忆、规划、决策、行动、反思
 """
 import os
+from datetime import datetime
 
 from agents.base_agent import BaseAgent
+from agents.case_repository import CaseRepository
 from agents.memory import AgentMemory
 from agents.planner import PlanningAgent
 from tools.keyword_matcher import KeywordMatcher
@@ -20,13 +22,14 @@ class ScoringAgent(BaseAgent):
     - 行动：执行打分并反思结果
     """
 
-    def __init__(self, rubric: str, scenario: str = None):
+    def __init__(self, rubric: str, scenario: str = None, use_iteration: bool = False):
         super().__init__(name="ScoringAgent", llm_client=LLMClient(model_type="qwen"))
         self.rubric = rubric
         self.scenario = scenario
 
         self.memory = AgentMemory()
         self.planner = PlanningAgent(self.memory)
+        self.case_repo = CaseRepository()
 
         has_deepseek_key = config.DEEPSEEK_API_KEY or os.getenv("OPENAI_API_KEY")
         self.secondary_client = (
@@ -44,9 +47,9 @@ class ScoringAgent(BaseAgent):
         else:
             self.context_agent = None
 
-    def process(self, text: str) -> dict:
+    def process(self, text: str, respondent_id: str = None) -> dict:
         """
-        完整的Agent流程：ReAct 循环或规划流程
+        完整的Agent流程：ReAct 循环或规划流程，集成案例库学习
         """
         self.log(f"开始处理：'{text[:30]}...'")
 
@@ -58,6 +61,7 @@ class ScoringAgent(BaseAgent):
             result = self._execute_plan(text, plan, observation)
 
         reflection = self._reflect(text, result, {"plan": [], "reasoning": ""})
+        result["reflection"] = reflection
         self.log(f"反思：{reflection['insight']}")
 
         # 存储有效经验，形成闭环
@@ -75,6 +79,34 @@ class ScoringAgent(BaseAgent):
             result.get("score"),
             result.get("confidence", 0.0),
         )
+
+        # 检查是否为疑难案例并记录到案例库
+        if self._should_record_as_difficult(result):
+            case_data = {
+                "id": respondent_id or "unknown",
+                "text": text,
+                "score": result.get("score"),
+                "confidence": result.get("confidence", 0),
+                "timestamp": datetime.now().isoformat(),
+                "iteration_count": result.get("iteration_count", 1),
+            }
+
+            details = result.get("details", {})
+            if "secondary" in details:
+                primary_score = details["primary"].get("score")
+                secondary_score = details["secondary"].get("score")
+
+                if primary_score != secondary_score:
+                    case_data["conflict_details"] = {
+                        "primary_score": primary_score,
+                        "secondary_score": secondary_score,
+                        "primary_confidence": details["primary"].get("confidence"),
+                        "secondary_confidence": details["secondary"].get("confidence"),
+                    }
+
+            added = self.case_repo.add_difficult_case(case_data)
+            if added:
+                self.log(f"✓ 已记录为疑难案例（编号:{respondent_id or 'unknown'}）")
 
         return result
 
@@ -131,12 +163,14 @@ class ScoringAgent(BaseAgent):
 
             if result.get("confidence", 0) >= target_conf:
                 self.log(f"置信度达 {result['confidence']:.2f}，结束循环")
+                result["iteration_count"] = len(state["tried_actions"])
                 return result
 
         best = max(
             state["tried_actions"],
             key=lambda x: x[1].get("confidence", 0) if x[1] else 0,
         )
+        best[1]["iteration_count"] = len(state["tried_actions"])
         return best[1]
 
     def _react_think(self, state: dict) -> str:
@@ -280,6 +314,30 @@ class ScoringAgent(BaseAgent):
             self.memory.long_term["edge_cases"] = edge_cases[-100:]
 
         return {"insight": insight, "should_remember": should_remember}
+
+    def _should_record_as_difficult(self, result: dict) -> bool:
+        """判断是否应该记录为疑难案例"""
+        if result.get("confidence", 1) < 0.7:
+            return True
+
+        if "details" in result and "secondary" in result["details"]:
+            primary_score = result["details"]["primary"].get("score")
+            secondary_score = result["details"]["secondary"].get("score")
+            if primary_score != secondary_score:
+                return True
+
+        if result.get("iteration_count", 1) > 1:
+            return True
+
+        if result.get("score") == 1:
+            return True
+
+        return False
+
+    def save_knowledge(self):
+        """保存学到的知识"""
+        self.case_repo.save_cases()
+        self.log("✓ 知识库已保存")
 
     def _score_with_context(self, text: str) -> dict:
         """使用情景辅助的打分"""

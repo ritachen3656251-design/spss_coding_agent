@@ -19,6 +19,7 @@ data/input/*.sav
 data/input/*.csv
 data/output/*
 data/cache/*
+data/knowledge/*.json
 !data/input/.gitkeep
 !data/output/.gitkeep
 !data/cache/.gitkeep

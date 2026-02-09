@@ -5,4 +5,5 @@ pyreadstat
 python-dotenv
 scikit-learn
 openpyxl
+aiofiles
 tqdm

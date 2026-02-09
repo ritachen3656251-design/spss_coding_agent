@@ -4,6 +4,7 @@ import pandas as pd
 
 import config
 from agents.base_agent import BaseAgent
+from agents.case_repository import CaseRepository
 
 
 class AnalysisAgent(BaseAgent):
@@ -11,28 +12,67 @@ class AnalysisAgent(BaseAgent):
     分析 Agent：
     1. 统计分数分布
     2. 分析高分/低分案例的共性
-    3. 生成可读性报告
+    3. 生成可读性报告（含 Agent 学习内容）
     """
 
-    def __init__(self):
+    def __init__(self, case_repo: CaseRepository = None):
         super().__init__(name="AnalysisAgent")
+        self.case_repo = case_repo or CaseRepository()
 
     def process(self, scored_df: pd.DataFrame) -> dict:
         """
-        分析整个数据集
-
-        返回：分析报告字典
+        分析整个数据集，包含学习报告
         """
         self.log("开始数据分析...")
 
         stats = self._basic_stats(scored_df)
         semantic_analysis = self._semantic_analysis(scored_df)
-        report = self._generate_report(stats, semantic_analysis)
+
+        id_col = config.ID_COL if config.ID_COL in scored_df.columns else (
+            "_row_id" if "_row_id" in scored_df.columns else scored_df.columns[0]
+        )
+        answer_col = config.ANSWER_COL if config.ANSWER_COL in scored_df.columns else (
+            "VAR00001" if "VAR00001" in scored_df.columns else scored_df.columns[1]
+        )
+        score_col = "编码分数"
+
+        all_responses = [
+            {
+                "id": str(row[id_col]),
+                "text": str(row[answer_col]) if pd.notna(row.get(answer_col)) else "",
+                "score": row[score_col],
+            }
+            for _, row in scored_df.iterrows()
+            if row[score_col] != 999
+        ]
+
+        report = self._generate_enhanced_report(
+            stats, semantic_analysis, all_responses
+        )
 
         return {
             "stats": stats,
             "semantic_analysis": semantic_analysis,
+            "learned_knowledge": self._get_learned_knowledge(),
             "report": report,
+        }
+
+    def _get_learned_knowledge(self) -> dict:
+        """获取 Agent 学到的知识"""
+        return {
+            "difficult_cases_count": len(
+                self.case_repo.cases.get("difficult_cases", [])
+            ),
+            "ambiguous_terms": len(
+                [
+                    k
+                    for k, v in self.case_repo.cases.get(
+                        "ambiguous_terms", {}
+                    ).items()
+                    if v.get("is_ambiguous")
+                ]
+            ),
+            "learned_rules": self.case_repo.generate_learned_rules(),
         }
 
     def _basic_stats(self, df: pd.DataFrame) -> dict:
@@ -192,4 +232,67 @@ class AnalysisAgent(BaseAgent):
 
 > 问卷数据编码采用大语言模型辅助方法。首先由{config.PRIMARY_MODEL}模型根据预设评分标准进行自动编码。对于模型置信度低于{config.CONFIDENCE_THRESHOLD}的样本，启用{config.SECONDARY_MODEL if config.ENABLE_DUAL_MODEL else '关键词匹配'}策略进行二次验证。为确保编码质量，从每个分数段随机抽取[N]个样本由两名独立评分者进行人工评分，Cohen's Kappa系数为[待计算]，表明编码具有良好的信度。
 """
+        return report
+
+    def _generate_enhanced_report(
+        self, stats: dict, semantic: dict, all_responses: list
+    ) -> str:
+        """生成增强版报告（包含 Agent 学习内容）"""
+        base_report = self._generate_report(stats, semantic)
+
+        report = base_report.replace(
+            "# 问卷编码分析报告",
+            "# 问卷编码分析报告（Agent 学习版）",
+            1,
+        )
+
+        report += "\n---\n\n"
+        report += self.case_repo.get_ambiguous_terms_report()
+
+        report += "\n---\n\n"
+        report += self.case_repo.get_boundary_patterns_report()
+
+        report += "\n---\n\n"
+        report += self.case_repo.get_respondent_report(all_responses)
+
+        report += "\n---\n\n"
+        report += self.case_repo.get_learned_rules_report()
+
+        report += "\n---\n\n"
+        report += self._generate_improvement_suggestions()
+
+        return report
+
+    def _generate_improvement_suggestions(self) -> str:
+        """基于学习结果生成改进建议"""
+        rules = self.case_repo.generate_learned_rules()
+
+        report = "## Agent 改进建议\n\n"
+
+        if not rules:
+            report += "当前数据量不足，暂无改进建议。建议处理更多数据后再查看此部分。\n"
+            return report
+
+        report += "### 建议1：更新评分标准\n"
+        report += "根据 Agent 学习到的规则，建议在评分标准中增加：\n\n"
+
+        for rule in rules[:5]:
+            report += f"- {rule['rule_text']}\n"
+
+        report += "\n### 建议2：优化关键词匹配\n"
+        report += "可以将以下词汇加入关键词匹配工具：\n\n"
+
+        word_rules = [r for r in rules if r["type"] == "word_tendency"]
+        for rule in word_rules[:3]:
+            report += f"- '{rule['word']}' → 倾向{rule['suggested_score']}分\n"
+
+        report += "\n### 建议3：人工复核重点\n"
+        report += "建议重点复核以下类型的回答：\n"
+        report += "- 包含模糊词汇的回答\n"
+        report += "- 1分案例（容易与2分混淆）\n"
+        difficult_count = len(
+            self.case_repo.cases.get("difficult_cases", [])
+        )
+        report += f"- 当前有{difficult_count}个疑难案例需要关注\n"
+
         return report

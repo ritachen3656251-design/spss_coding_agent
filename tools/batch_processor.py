@@ -24,7 +24,9 @@ class AgentPipeline:
         self.preprocessing_agent = PreprocessingAgent()
         self.scoring_agent = ScoringAgent(rubric, scenario)
         self.quality_agent = QualityAgent()
-        self.analysis_agent = AnalysisAgent()
+        self.analysis_agent = AnalysisAgent(
+            case_repo=self.scoring_agent.case_repo
+        )
 
     def process_csv(
         self,
@@ -33,10 +35,66 @@ class AgentPipeline:
         id_col: str | None = None,
         answer_col: str | None = None,
         score_col: str = "编码分数",
+        use_async: bool | None = None,
+        resume: bool = True,
+        **kwargs,
     ) -> pd.DataFrame:
         """
-        批量处理 CSV 文件
-        id_col/answer_col 未指定时从 config 读取；若列不存在则自动推断（第一列作为回答，行号作为编号）
+        批量处理（支持同步/异步模式）
+        use_async: 是否异步，默认从 config.USE_ASYNC_PROCESSING 读取
+        resume: 是否断点续传（仅异步模式生效）
+        """
+        if use_async is None:
+            use_async = getattr(config, "USE_ASYNC_PROCESSING", False)
+
+        if use_async:
+            from tools.async_processor import process_csv_with_async
+
+            print("⚡ 使用异步处理模式")
+            df = process_csv_with_async(
+                self, input_csv, output_csv,
+                id_col=id_col or config.ID_COL,
+                answer_col=answer_col or config.ANSWER_COL,
+                score_col=score_col,
+                resume=resume,
+                **kwargs,
+            )
+        else:
+            print("🔄 使用同步处理模式")
+            df = self._process_csv_sync(
+                input_csv, output_csv,
+                id_col=id_col,
+                answer_col=answer_col,
+                score_col=score_col,
+                **kwargs,
+            )
+
+        print("📊 正在生成分析报告...")
+        analysis_result = self.analysis_agent.process(df)
+        report_path = output_csv.replace(".csv", "_report.md")
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write(analysis_result["report"])
+        print(f"✓ 分析报告已保存：{report_path}\n")
+
+        quality_report = self.quality_agent.generate_quality_report()
+        quality_path = output_csv.replace(".csv", "_quality.json")
+        with open(quality_path, "w", encoding="utf-8") as f:
+            json.dump(quality_report, f, ensure_ascii=False, indent=2)
+        print(f"✓ 质量报告已保存：{quality_path}\n")
+
+        return df
+
+    def _process_csv_sync(
+        self,
+        input_csv: str,
+        output_csv: str,
+        id_col: str | None = None,
+        answer_col: str | None = None,
+        score_col: str = "编码分数",
+        **kwargs,
+    ) -> pd.DataFrame:
+        """
+        同步处理逻辑
         """
         id_col = id_col or config.ID_COL
         answer_col = answer_col or config.ANSWER_COL
@@ -82,7 +140,9 @@ class AgentPipeline:
                 df.at[idx, "质量标记"] = ""
                 continue
 
-            scoring_result = self.scoring_agent.process(preprocess_result["text"])
+            scoring_result = self.scoring_agent.process(
+                preprocess_result["text"], respondent_id=row_id
+            )
             quality_result = self.quality_agent.process(
                 scoring_result, text, row_id
             )
@@ -101,18 +161,5 @@ class AgentPipeline:
 
         df.to_csv(output_csv, index=False, encoding="utf-8-sig")
         print(f"\n✓ 处理完成，结果已保存：{output_csv}\n")
-
-        print("📊 正在生成分析报告...")
-        analysis_result = self.analysis_agent.process(df)
-        report_path = output_csv.replace(".csv", "_report.md")
-        with open(report_path, "w", encoding="utf-8") as f:
-            f.write(analysis_result["report"])
-        print(f"✓ 分析报告已保存：{report_path}\n")
-
-        quality_report = self.quality_agent.generate_quality_report()
-        quality_path = output_csv.replace(".csv", "_quality.json")
-        with open(quality_path, "w", encoding="utf-8") as f:
-            json.dump(quality_report, f, ensure_ascii=False, indent=2)
-        print(f"✓ 质量报告已保存：{quality_path}\n")
 
         return df
