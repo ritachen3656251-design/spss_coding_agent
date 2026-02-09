@@ -1,0 +1,6 @@
+dashscope
+openai
+pandas
+pyreadstat
+python-dotenv
+tqdm

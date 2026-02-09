@@ -1,0 +1,30 @@
+# 环境与密钥
+.env
+env
+*.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+*.egg-info/
+.eggs/
+
+# 数据与缓存（保留目录结构）
+data/input/*.sav
+data/input/*.csv
+data/output/*
+data/cache/*
+!data/input/.gitkeep
+!data/output/.gitkeep
+!data/cache/.gitkeep
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
