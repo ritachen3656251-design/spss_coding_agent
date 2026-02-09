@@ -101,6 +101,10 @@ def main():
         if needs_review > 0:
             print(f"\n⚠️  有 {needs_review} 条数据需要人工复核")
 
+    print("\n💾 保存 Agent 记忆...")
+    pipeline.scoring_agent.memory.save_long_term()
+    print("✓ 记忆已保存，将用于优化未来处理")
+
 
 if __name__ == "__main__":
     main()

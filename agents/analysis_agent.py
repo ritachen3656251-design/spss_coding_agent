@@ -1,5 +1,9 @@
-from agents.base_agent import BaseAgent
+from datetime import datetime
+
 import pandas as pd
+
+import config
+from agents.base_agent import BaseAgent
 
 
 class AnalysisAgent(BaseAgent):
@@ -36,14 +40,19 @@ class AnalysisAgent(BaseAgent):
         score_col = "编码分数"
 
         low_confidence_count = 0
+        needs_review_count = 0
         if "质量标记" in df.columns:
             low_confidence_count = int(
                 df["质量标记"].astype(str).str.contains("LOW_CONFIDENCE", na=False).sum()
+            )
+            needs_review_count = int(
+                df["质量标记"].astype(str).str.contains("NEEDS_REVIEW", na=False).sum()
             )
 
         valid_subset = df[df[score_col].isin([0, 1, 2])]
         non_999 = df[df[score_col] != 999]
         mean_score = non_999[score_col].mean() if len(non_999) > 0 else None
+        std_score = non_999[score_col].std() if len(non_999) > 1 else 0.0
 
         return {
             "total_count": len(df),
@@ -51,7 +60,9 @@ class AnalysisAgent(BaseAgent):
             "valid_count": len(valid_subset),
             "missing_count": len(df[df[score_col] == 999]),
             "mean_score": mean_score,
+            "std_score": float(std_score) if std_score is not None else 0.0,
             "low_confidence_count": low_confidence_count,
+            "needs_review_count": needs_review_count,
         }
 
     def _semantic_analysis(self, df: pd.DataFrame) -> dict:
@@ -93,25 +104,34 @@ class AnalysisAgent(BaseAgent):
 
     def _generate_report(self, stats: dict, semantic: dict) -> str:
         """
-        生成 Markdown 格式的报告
+        生成科研级分析报告
         """
         total = stats["total_count"]
         if total == 0:
             return "# 问卷编码分析报告\n\n无数据。"
 
-        valid_count = stats["valid_count"]
-        missing_count = stats["missing_count"]
         mean_score = stats["mean_score"]
-        mean_str = f"{mean_score:.2f}" if mean_score is not None and pd.notna(mean_score) else "N/A"
+        mean_str = (
+            f"{mean_score:.2f}"
+            if mean_score is not None and pd.notna(mean_score)
+            else "N/A"
+        )
+        std_str = f"{stats.get('std_score', 0):.2f}"
 
         report = f"""# 问卷编码分析报告
 
+## 元数据
+- 生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+- 使用模型：{config.PRIMARY_MODEL}
+- 双模型验证：{'启用' if config.ENABLE_DUAL_MODEL else '未启用'}
+
 ## 一、基础统计
 
-- 总样本数：{total}
-- 有效样本：{valid_count} ({valid_count / total * 100:.1f}%)
-- 缺失值(999)：{missing_count} ({missing_count / total * 100:.1f}%)
+- 总样本数：{stats['total_count']}
+- 有效样本：{stats['valid_count']} ({stats['valid_count']/total*100:.1f}%)
+- 缺失值(999)：{stats['missing_count']} ({stats['missing_count']/total*100:.1f}%)
 - 平均分：{mean_str}
+- 标准差：{std_str}
 
 ### 分数分布
 """
@@ -119,16 +139,57 @@ class AnalysisAgent(BaseAgent):
             pct = count / total * 100
             report += f"- {score}分：{count}个 ({pct:.1f}%)\n"
 
-        report += f"\n## 二、质量控制\n\n"
-        report += f"- 低置信度样本：{stats['low_confidence_count']}个\n"
+        report += f"""
+## 二、质量控制
 
-        report += f"\n## 三、语义分析\n\n"
+- 低置信度样本：{stats['low_confidence_count']}个
+- 需人工复核：{stats.get('needs_review_count', 0)}个
+
+### 建议
+"""
+        if stats["low_confidence_count"] > total * 0.2:
+            report += "⚠️ 超过20%的样本置信度较低，建议：\n"
+            report += "1. 人工验证分层抽样的100个样本\n"
+            report += "2. 计算Cohen's Kappa评估信度\n"
+            report += "3. 根据验证结果调整评分标准\n"
+        else:
+            report += "✓ 置信度分布合理，建议人工验证30-50个样本确认质量\n"
+
+        report += f"""
+## 三、语义分析
+
+### 各分数段特征
+"""
         for score_key, analysis in semantic.items():
             score = score_key.split("_")[1]
-            report += f"### {score}分样本特征\n"
+            report += f"\n#### {score}分样本\n"
             if isinstance(analysis, dict) and "common_patterns" in analysis:
+                report += "共同特征：\n"
                 for pattern in analysis["common_patterns"]:
                     report += f"- {pattern}\n"
-            report += "\n"
 
+        report += f"""
+## 四、信度检验（待完成）
+
+为确保编码质量，请完成以下步骤：
+
+1. **分层抽样验证**
+   - 运行：`python tools/create_validation_sheet.py`
+   - 人工评分抽样样本
+   - 计算Cohen's Kappa
+
+2. **可疑样本复核**
+   - 检查 `*_quality.json` 中的低置信度案例
+   - 人工判断是否需要调整
+
+3. **结果报告**
+   - 在论文方法部分报告：使用的模型、置信度阈值、Kappa系数
+   - 附录中提供评分标准和抽样验证结果
+
+## 五、引用建议
+
+如果在论文中使用本系统，建议这样描述方法：
+
+> 问卷数据编码采用大语言模型辅助方法。首先由{config.PRIMARY_MODEL}模型根据预设评分标准进行自动编码。对于模型置信度低于{config.CONFIDENCE_THRESHOLD}的样本，启用{config.SECONDARY_MODEL if config.ENABLE_DUAL_MODEL else '关键词匹配'}策略进行二次验证。为确保编码质量，从每个分数段随机抽取[N]个样本由两名独立评分者进行人工评分，Cohen's Kappa系数为[待计算]，表明编码具有良好的信度。
+"""
         return report

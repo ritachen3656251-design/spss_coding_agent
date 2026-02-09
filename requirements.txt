@@ -3,4 +3,6 @@ openai
 pandas
 pyreadstat
 python-dotenv
+scikit-learn
+openpyxl
 tqdm

@@ -22,6 +22,9 @@ DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com")
 CONFIDENCE_THRESHOLD = 0.7  # 低于此置信度触发二次验证
 ENABLE_DUAL_MODEL = True  # 是否启用双模型验证
 ENABLE_KEYWORD_FALLBACK = True  # 是否启用关键词回退策略
+ENABLE_REACT = True  # 是否启用 ReAct 循环（思考→行动→观察→检查）
+REACT_CONFIDENCE_TARGET = 0.8  # ReAct 循环满意阈值
+REACT_MAX_ITERATIONS = 3  # ReAct 最大迭代次数
 
 # 评分配置
 SCORE_OPTIONS = [0, 1, 2, 999]
