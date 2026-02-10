@@ -3,6 +3,7 @@ Agent 流水线：整合预处理、打分、质量检查、分析，批量处�
 """
 import json
 import os
+import time
 
 import pandas as pd
 from tqdm import tqdm
@@ -27,6 +28,77 @@ class AgentPipeline:
         self.analysis_agent = AnalysisAgent(
             case_repo=self.scoring_agent.case_repo
         )
+
+    def score_single(
+        self, text: str, respondent_id: str = "single"
+    ) -> dict:
+        """
+        单条文本打分（供前端/API 调用）
+
+        返回：{score, confidence, reason, time, strategy}
+        """
+        t0 = time.time()
+        preprocess_result = self.preprocessing_agent.process(
+            str(text) if text else ""
+        )
+
+        if preprocess_result["is_999"]:
+            return {
+                "score": 999,
+                "confidence": 1.0,
+                "reason": "",
+                "time": time.time() - t0,
+                "strategy": "auto_999",
+            }
+
+        scoring_result = self.scoring_agent.process(
+            preprocess_result["text"], respondent_id=respondent_id
+        )
+        quality_result = self.quality_agent.process(
+            scoring_result, preprocess_result["text"], respondent_id
+        )
+
+        return {
+            "score": quality_result["score"],
+            "confidence": quality_result["confidence"],
+            "reason": quality_result.get("reasoning") or "",
+            "time": time.time() - t0,
+            "strategy": quality_result.get("strategy", ""),
+        }
+
+    def process_dataframe(
+        self,
+        input_df: pd.DataFrame,
+        id_col: str = "编号",
+        answer_col: str = "回答内容",
+        score_col: str = "AI评分",
+    ) -> pd.DataFrame:
+        """
+        批量处理 DataFrame（供评估/前端调用）
+
+        输入需包含：编号、回答内容
+        返回：带 AI评分、置信度、判分理由 的 DataFrame
+        """
+        df = input_df.copy()
+        if id_col not in df.columns:
+            df[id_col] = [str(i + 1) for i in range(len(df))]
+        if answer_col not in df.columns:
+            answer_col = df.columns[0]
+
+        df[score_col] = None
+        df["置信度"] = None
+        df["判分理由"] = None
+
+        for idx, row in df.iterrows():
+            row_id = str(row[id_col])
+            text = str(row[answer_col]) if pd.notna(row[answer_col]) else ""
+
+            result = self.score_single(text, respondent_id=row_id)
+            df.at[idx, score_col] = result["score"]
+            df.at[idx, "置信度"] = result["confidence"]
+            df.at[idx, "判分理由"] = result["reason"]
+
+        return df
 
     def process_csv(
         self,
