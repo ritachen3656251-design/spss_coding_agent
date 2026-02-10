@@ -70,7 +70,7 @@ class AgentPipeline:
             )
 
         print("📊 正在生成分析报告...")
-        analysis_result = self.analysis_agent.process(df)
+        analysis_result = self.analysis_agent.process(df, score_col=score_col)
         report_path = output_csv.replace(".csv", "_report.md")
         with open(report_path, "w", encoding="utf-8") as f:
             f.write(analysis_result["report"])

@@ -19,14 +19,19 @@ class AnalysisAgent(BaseAgent):
         super().__init__(name="AnalysisAgent")
         self.case_repo = case_repo or CaseRepository()
 
-    def process(self, scored_df: pd.DataFrame) -> dict:
+    def process(self, scored_df: pd.DataFrame, score_col: str = None) -> dict:
         """
         分析整个数据集，包含学习报告
+
+        score_col: 分数列名，默认 "编码分数"，评估流程可能传入 "AI评分"
         """
         self.log("开始数据分析...")
+        score_col = score_col or "编码分数"
+        if score_col not in scored_df.columns and "AI评分" in scored_df.columns:
+            score_col = "AI评分"
 
-        stats = self._basic_stats(scored_df)
-        semantic_analysis = self._semantic_analysis(scored_df)
+        stats = self._basic_stats(scored_df, score_col)
+        semantic_analysis = self._semantic_analysis(scored_df, score_col)
 
         id_col = config.ID_COL if config.ID_COL in scored_df.columns else (
             "_row_id" if "_row_id" in scored_df.columns else scored_df.columns[0]
@@ -34,7 +39,6 @@ class AnalysisAgent(BaseAgent):
         answer_col = config.ANSWER_COL if config.ANSWER_COL in scored_df.columns else (
             "VAR00001" if "VAR00001" in scored_df.columns else scored_df.columns[1]
         )
-        score_col = "编码分数"
 
         all_responses = [
             {
@@ -75,9 +79,10 @@ class AnalysisAgent(BaseAgent):
             "learned_rules": self.case_repo.generate_learned_rules(),
         }
 
-    def _basic_stats(self, df: pd.DataFrame) -> dict:
+    def _basic_stats(self, df: pd.DataFrame, score_col: str = "编码分数") -> dict:
         """基础统计"""
-        score_col = "编码分数"
+        if score_col not in df.columns:
+            score_col = "AI评分" if "AI评分" in df.columns else "编码分数"
 
         low_confidence_count = 0
         needs_review_count = 0
@@ -89,33 +94,35 @@ class AnalysisAgent(BaseAgent):
                 df["质量标记"].astype(str).str.contains("NEEDS_REVIEW", na=False).sum()
             )
 
-        valid_subset = df[df[score_col].isin([0, 1, 2])]
-        non_999 = df[df[score_col] != 999]
-        mean_score = non_999[score_col].mean() if len(non_999) > 0 else None
-        std_score = non_999[score_col].std() if len(non_999) > 1 else 0.0
+        score_vals = pd.to_numeric(df[score_col], errors="coerce").fillna(999).astype(int)
+        valid_subset = df[score_vals.isin([0, 1, 2])]
+        non_999_vals = score_vals[score_vals != 999]
+        mean_score = non_999_vals.mean() if len(non_999_vals) > 0 else None
+        std_score = non_999_vals.std() if len(non_999_vals) > 1 else 0.0
 
         return {
             "total_count": len(df),
-            "score_distribution": df[score_col].value_counts().to_dict(),
+            "score_distribution": score_vals.value_counts().to_dict(),
             "valid_count": len(valid_subset),
-            "missing_count": len(df[df[score_col] == 999]),
+            "missing_count": int((score_vals == 999).sum()),
             "mean_score": mean_score,
             "std_score": float(std_score) if std_score is not None else 0.0,
             "low_confidence_count": low_confidence_count,
             "needs_review_count": needs_review_count,
         }
 
-    def _semantic_analysis(self, df: pd.DataFrame) -> dict:
+    def _semantic_analysis(self, df: pd.DataFrame, score_col: str = "编码分数") -> dict:
         """
         语义分析：找出各分数段的典型特征
         """
         analysis = {}
-
-        if "编码分数" not in df.columns or "回答内容" not in df.columns:
+        if score_col not in df.columns:
+            score_col = "AI评分" if "AI评分" in df.columns else "编码分数"
+        if score_col not in df.columns or "回答内容" not in df.columns:
             return analysis
 
         for score in [0, 1, 2]:
-            subset = df[df["编码分数"] == score]["回答内容"].dropna().astype(str).tolist()
+            subset = df[df[score_col] == score]["回答内容"].dropna().astype(str).tolist()
             if not subset:
                 continue
 

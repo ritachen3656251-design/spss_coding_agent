@@ -8,29 +8,39 @@ class KeywordMatcher:
     """
 
     def __init__(self):
-        # 各分数对应的关键词模式
+        # 各分数对应的关键词模式（0分先匹配，用于排除易误判为2分的情况）
         self.patterns = {
+            0: [
+                r"捡起.*猫",
+                r"骗人",
+                r"吓唬",
+                r"^不小心$",
+                r"^以为是东西$",
+                r"以为是假",
+                r"以为在帮",
+            ],
             2: [
                 r"以为",
                 r"没发现",
                 r"拿错",
-                r"看错",
                 r"误以为",
+                r"看错了",
+                r"认错了",
+                r"当成",
+                r"看成",
                 r"当成.*围巾",
                 r"把.*猫.*当.*围巾",
+                r"以为是.{1,8}(巾|毛|布|皮|领|绒)",
             ],
             1: [
                 r"想",
                 r"打算",
                 r"为了还",
+                r"很像",
+                r"看起来像",
                 r"颜色.*像",
+                r"形状.*像",
                 r"位置.*近",
-            ],
-            0: [
-                r"捡起.*猫",
-                r"骗人",
-                r"吓唬",
-                r"偷",
             ],
         }
 
@@ -56,8 +66,8 @@ class KeywordMatcher:
             if keyword in text:
                 return {"score": 999, "confidence": 1.0, "matched_patterns": [keyword]}
 
-        # 按优先级匹配（2分 > 1分 > 0分）
-        for score in [2, 1, 0]:
+        # 按优先级匹配（0分排除规则 > 2分 > 1分）
+        for score in [0, 2, 1]:
             matched = []
             for pattern in self.patterns[score]:
                 if re.search(pattern, text):
