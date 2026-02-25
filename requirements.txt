@@ -7,7 +7,3 @@ scikit-learn
 openpyxl
 aiofiles
 tqdm
-streamlit
-plotly
-fastapi
-uvicorn
