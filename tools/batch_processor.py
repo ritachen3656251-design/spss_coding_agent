@@ -1,9 +1,8 @@
 """
-Agent 流水线：整合预处理、打分、质量检查、分析，批量处理 CSV
+Agent 流水线：整合预处理、打分、质量检查、分析，批量处理 CSV 的流水线
 """
 import json
 import os
-import time
 
 import pandas as pd
 from tqdm import tqdm
@@ -14,6 +13,8 @@ from agents.quality_agent import QualityAgent
 from agents.analysis_agent import AnalysisAgent
 import config
 
+_BATCH_SIZE = 10  # 每 N 条保存一次
+
 
 class AgentPipeline:
     """
@@ -21,170 +22,48 @@ class AgentPipeline:
     高置信度与 999 的题目不输出判分理由，只输出分数。
     """
 
-    def __init__(self, rubric: str, scenario: str = None):
+    def __init__(self, rubric: str):
         self.preprocessing_agent = PreprocessingAgent()
-        self.scoring_agent = ScoringAgent(rubric, scenario)
+        self.scoring_agent = ScoringAgent(rubric)
         self.quality_agent = QualityAgent()
-        self.analysis_agent = AnalysisAgent(
-            case_repo=self.scoring_agent.case_repo
-        )
+        self.analysis_agent = AnalysisAgent()
 
-    def score_single(
-        self, text: str, respondent_id: str = "single"
-    ) -> dict:
-        """
-        单条文本打分（供前端/API 调用）
+    def _read_csv(self, path: str) -> pd.DataFrame:
+        """读取 CSV，自动尝试 utf-8-sig 与 gbk 编码。"""
+        try:
+            return pd.read_csv(path, encoding="utf-8-sig")
+        except UnicodeDecodeError:
+            return pd.read_csv(path, encoding="gbk")
 
-        返回：{score, confidence, reason, time, strategy}
-        """
-        t0 = time.time()
-        preprocess_result = self.preprocessing_agent.process(
-            str(text) if text else ""
-        )
-
-        if preprocess_result["is_999"]:
-            return {
-                "score": 999,
-                "confidence": 1.0,
-                "reason": "",
-                "time": time.time() - t0,
-                "strategy": "auto_999",
-            }
-
-        scoring_result = self.scoring_agent.process(
-            preprocess_result["text"], respondent_id=respondent_id
-        )
-        quality_result = self.quality_agent.process(
-            scoring_result, preprocess_result["text"], respondent_id
-        )
-
-        return {
-            "score": quality_result["score"],
-            "confidence": quality_result["confidence"],
-            "reason": quality_result.get("reasoning") or "",
-            "time": time.time() - t0,
-            "strategy": quality_result.get("strategy", ""),
-        }
-
-    def process_dataframe(
-        self,
-        input_df: pd.DataFrame,
-        id_col: str = "编号",
-        answer_col: str = "回答内容",
-        score_col: str = "AI评分",
-    ) -> pd.DataFrame:
-        """
-        批量处理 DataFrame（供评估/前端调用）
-
-        输入需包含：编号、回答内容
-        返回：带 AI评分、置信度、判分理由 的 DataFrame
-        """
-        df = input_df.copy()
-        if id_col not in df.columns:
-            df[id_col] = [str(i + 1) for i in range(len(df))]
-        if answer_col not in df.columns:
-            answer_col = df.columns[0]
-
-        df[score_col] = None
-        df["置信度"] = None
-        df["判分理由"] = None
-
-        for idx, row in df.iterrows():
-            row_id = str(row[id_col])
-            text = str(row[answer_col]) if pd.notna(row[answer_col]) else ""
-
-            result = self.score_single(text, respondent_id=row_id)
-            df.at[idx, score_col] = result["score"]
-            df.at[idx, "置信度"] = result["confidence"]
-            df.at[idx, "判分理由"] = result["reason"]
-
-        return df
+    def _ensure_output_dir(self, filepath: str) -> None:
+        """确保输出文件所在目录存在。"""
+        out_dir = os.path.dirname(os.path.abspath(filepath))
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
 
     def process_csv(
         self,
         input_csv: str,
         output_csv: str,
-        id_col: str | None = None,
-        answer_col: str | None = None,
+        id_col: str = "编号",
+        answer_col: str = "回答内容",
         score_col: str = "编码分数",
-        use_async: bool | None = None,
-        resume: bool = True,
-        **kwargs,
     ) -> pd.DataFrame:
         """
-        批量处理（支持同步/异步模式）
-        use_async: 是否异步，默认从 config.USE_ASYNC_PROCESSING 读取
-        resume: 是否断点续传（仅异步模式生效）
+        批量处理 CSV 文件
+
+        Raises:
+            ValueError: 当必需列不存在或数据为空时
         """
-        if use_async is None:
-            use_async = getattr(config, "USE_ASYNC_PROCESSING", False)
+        print("正在读取数据...")
+        df = self._read_csv(input_csv)
 
-        if use_async:
-            from tools.async_processor import process_csv_with_async
+        if df.empty:
+            raise ValueError(f"输入文件为空：{input_csv}")
 
-            print("⚡ 使用异步处理模式")
-            df = process_csv_with_async(
-                self, input_csv, output_csv,
-                id_col=id_col or config.ID_COL,
-                answer_col=answer_col or config.ANSWER_COL,
-                score_col=score_col,
-                resume=resume,
-                **kwargs,
-            )
-        else:
-            print("🔄 使用同步处理模式")
-            df = self._process_csv_sync(
-                input_csv, output_csv,
-                id_col=id_col,
-                answer_col=answer_col,
-                score_col=score_col,
-                **kwargs,
-            )
-
-        print("📊 正在生成分析报告...")
-        analysis_result = self.analysis_agent.process(df, score_col=score_col)
-        report_path = output_csv.replace(".csv", "_report.md")
-        with open(report_path, "w", encoding="utf-8") as f:
-            f.write(analysis_result["report"])
-        print(f"✓ 分析报告已保存：{report_path}\n")
-
-        quality_report = self.quality_agent.generate_quality_report()
-        quality_path = output_csv.replace(".csv", "_quality.json")
-        with open(quality_path, "w", encoding="utf-8") as f:
-            json.dump(quality_report, f, ensure_ascii=False, indent=2)
-        print(f"✓ 质量报告已保存：{quality_path}\n")
-
-        return df
-
-    def _process_csv_sync(
-        self,
-        input_csv: str,
-        output_csv: str,
-        id_col: str | None = None,
-        answer_col: str | None = None,
-        score_col: str = "编码分数",
-        **kwargs,
-    ) -> pd.DataFrame:
-        """
-        同步处理逻辑
-        """
-        id_col = id_col or config.ID_COL
-        answer_col = answer_col or config.ANSWER_COL
-
-        print("📂 正在读取数据...")
-        try:
-            df = pd.read_csv(input_csv, encoding="utf-8-sig")
-        except Exception:
-            df = pd.read_csv(input_csv, encoding="gbk")
-
-        # 列名自动适配：若期望列不存在，用第一列作为回答、行号作为编号
-        if answer_col not in df.columns:
-            answer_col = df.columns[0]
-            print(f"   使用列「{answer_col}」作为回答内容\n")
-        if id_col not in df.columns:
-            df["_row_id"] = range(1, len(df) + 1)
-            id_col = "_row_id"
-            print(f"   未找到编号列，使用行号作为编号\n")
+        missing = [c for c in (id_col, answer_col) if c not in df.columns]
+        if missing:
+            raise ValueError(f"输入文件缺少必需列：{missing}，现有列：{list(df.columns)}")
 
         print(f"✓ 读取成功：{len(df)} 条数据\n")
 
@@ -196,42 +75,64 @@ class AgentPipeline:
 
         cache_dir = config.CACHE_DIR
         os.makedirs(cache_dir, exist_ok=True)
+        self._ensure_output_dir(output_csv)
 
+        error_count = 0
         print("🤖 开始 Agent 流水线处理...\n")
+
         for idx, row in tqdm(df.iterrows(), total=len(df), desc="处理进度"):
-            row_id = str(row[id_col])
-            text = str(row[answer_col]) if pd.notna(row[answer_col]) else ""
+            try:
+                row_id = str(row[id_col])
+                text = str(row[answer_col]) if pd.notna(row[answer_col]) else ""
 
-            preprocess_result = self.preprocessing_agent.process(text)
+                preprocess_result = self.preprocessing_agent.process(text)
 
-            if preprocess_result["is_999"]:
-                df.at[idx, score_col] = 999
-                df.at[idx, "判分理由"] = ""  # 999 不输出理由，只输出分数
-                df.at[idx, "使用策略"] = "auto_999"
-                df.at[idx, "置信度"] = 1.0
-                df.at[idx, "质量标记"] = ""
-                continue
+                if preprocess_result["is_999"]:
+                    df.at[idx, score_col] = 999
+                    df.at[idx, "判分理由"] = ""  # 999 不输出理由，只输出分数
+                    df.at[idx, "使用策略"] = "auto_999"
+                    df.at[idx, "置信度"] = 1.0
+                    df.at[idx, "质量标记"] = ""
+                    continue
 
-            scoring_result = self.scoring_agent.process(
-                preprocess_result["text"], respondent_id=row_id
-            )
-            quality_result = self.quality_agent.process(
-                scoring_result, text, row_id
-            )
+                scoring_result = self.scoring_agent.process(preprocess_result["text"])
+                quality_result = self.quality_agent.process(
+                    scoring_result, text, row_id
+                )
 
-            df.at[idx, score_col] = quality_result["score"]
-            df.at[idx, "置信度"] = quality_result["confidence"]
-            # 高置信度时 scoring 已返回 reasoning=""，此处直接写入
-            df.at[idx, "判分理由"] = quality_result.get("reasoning") or ""
-            df.at[idx, "使用策略"] = quality_result["strategy"]
-            df.at[idx, "质量标记"] = ", ".join(
-                quality_result.get("quality_flags", [])
-            )
+                df.at[idx, score_col] = quality_result["score"]
+                df.at[idx, "置信度"] = quality_result["confidence"]
+                df.at[idx, "判分理由"] = quality_result.get("reasoning") or ""
+                df.at[idx, "使用策略"] = quality_result["strategy"]
+                df.at[idx, "质量标记"] = ", ".join(
+                    quality_result.get("quality_flags", [])
+                )
+            except Exception as e:
+                error_count += 1
+                df.at[idx, "质量标记"] = f"ERROR: {str(e)[:50]}"
+                print(f"\n⚠️ 第 {idx + 1} 行处理失败 (ID={row.get(id_col, '?')}): {e}")
 
-            if idx % 10 == 0:
+            if (idx + 1) % _BATCH_SIZE == 0:
                 df.to_csv(output_csv, index=False, encoding="utf-8-sig")
 
         df.to_csv(output_csv, index=False, encoding="utf-8-sig")
-        print(f"\n✓ 处理完成，结果已保存：{output_csv}\n")
+        print(f"\n✓ 处理完成，结果已保存：{output_csv}")
+        if error_count > 0:
+            print(f"⚠️ 共 {error_count} 条处理失败，已标记在「质量标记」列\n")
+        else:
+            print()
+
+        print("正在生成分析报告...")
+        analysis_result = self.analysis_agent.process(df)
+        report_path = output_csv.replace(".csv", "_report.md")
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write(analysis_result["report"])
+        print(f"✓ 分析报告已保存：{report_path}\n")
+
+        quality_report = self.quality_agent.generate_quality_report()
+        quality_path = output_csv.replace(".csv", "_quality.json")
+        with open(quality_path, "w", encoding="utf-8") as f:
+            json.dump(quality_report, f, ensure_ascii=False, indent=2)
+        print(f"✓ 质量报告已保存：{quality_path}\n")
 
         return df

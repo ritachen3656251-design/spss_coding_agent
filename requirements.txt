@@ -1,9 +1,7 @@
+# SPSS Agent 依赖
 dashscope
-openai
 pandas
 pyreadstat
 python-dotenv
-scikit-learn
-openpyxl
-aiofiles
 tqdm
+openai
