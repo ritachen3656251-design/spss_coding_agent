@@ -1,0 +1,57 @@
+
+# 数据集分割报告
+
+生成时间：2026-02-10 13:56:14
+随机种子：42
+来源文件：None
+
+## 数据统计
+
+- 总数据：0条
+- 已标注：411条
+- 未标注：0条
+
+## 分割策略
+
+采用**分层抽样**确保各数据集的分数分布一致，避免分布偏差。
+
+## 评估数据集
+
+### 1. 开发集 (Dev Set) - 48条
+**用途**：日常开发、快速迭代
+**分数分布**：0分:26个, 1分:1个, 2分:21个
+**文件**：`data/evaluation/splits/dev_set.csv`
+
+### 2. 测试集 (Test Set) - 98条
+**用途**：最终评估（禁止调参！）
+**分数分布**：0分:53个, 1分:2个, 2分:43个
+**文件**：`data/evaluation/splits/test_set.csv`
+⚠️  **重要**：测试集仅用于最终报告
+
+### 3. 保留集 (Holdout Set) - 265条
+**用途**：规则学习、标准优化
+**分数分布**：0分:140个, 1分:9个, 2分:116个
+**文件**：`data/evaluation/splits/holdout_set.csv`
+
+## 生产数据
+
+### 未标注池 - 3063条
+**用途**：生产环境处理
+**文件**：`data/production/input/questionnaire.csv`
+
+## 使用建议
+
+1. **日常开发**：
+```bash
+   python scripts/evaluate_agent.py --version v1.0-baseline --dataset dev
+```
+
+2. **生产处理**：
+```bash
+   python main.py
+```
+
+3. **最终评估**（仅一次）：
+```bash
+   python scripts/evaluate_agent.py --version v2.0-final --dataset test
+```

@@ -1,6 +1,6 @@
 # SPSS Agent System - 智能问卷编码系统
 
-基于多 Agent 的问卷文本智能编码系统，完整流程：**SAV → CSV → 预处理 → 智能打分 → 质量检查 → 分析报告**。
+基于多 Agent 的问卷文本智能编码系统，完整流程：SAV → CSV → 预处理 → 智能打分 → 质量检查 → 分析报告。
 
 支持 0/1/2/999 四级心理化编码（无心理化、心理状态、错误信念、无效值），适用于心理量表、开放题编码等场景。
 
@@ -8,24 +8,24 @@
 
 ## 功能特性
 
-- **多 Agent 流水线**：预处理 → 打分 → 质量检查 → 分析，全流程自动化
-- **双模型验证**：主模型 Qwen + 辅助模型 DeepSeek，低置信度时自动二次验证
-- **关键词回退**：对「无法播放」「看不了」等表述自动判为 999
-- **ReAct 循环**：打分 Agent 支持思考→行动→观察→检查，提升推理质量
-- **断点续传**：支持中断后从断点继续处理
-- **评估体系**：dev/test/holdout 划分，Kappa、准确率、混淆矩阵等指标
+- 多 Agent 流水线：预处理 → 打分 → 质量检查 → 分析，全流程自动化
+- 双模型验证：主模型 Qwen + 辅助模型 DeepSeek，低置信度时自动二次验证
+- 关键词回退：对「无法播放」「看不了」等表述自动判为 999
+- ReAct 循环：打分 Agent 支持思考→行动→观察→检查，提升推理质量
+- 断点续传：支持中断后从断点继续处理
+- 评估体系：dev/test/holdout 划分，Kappa、准确率、混淆矩阵等指标
 
 ---
 
 ## 环境与安装
 
-**Python 3.10+**
+Python 3.10+
 
 ```bash
 pip install -r requirements.txt
 ```
 
-**依赖**：dashscope、openai、pandas、pyreadstat、python-dotenv、scikit-learn、openpyxl、aiofiles、tqdm
+依赖：dashscope、pandas、pyreadstat、python-dotenv、scikit-learn、openpyxl、aiofiles、tqdm
 
 ---
 
@@ -57,15 +57,15 @@ DEEPSEEK_API_KEY=your-deepseek-key        # 双模型验证（可选）
 python main.py
 ```
 
-**输入**：
+输入：
 - 优先使用 `data/input/questionnaire.csv`
 - 若无 CSV，则自动在 `data/input/` 下查找 `.sav` 并转换为 questionnaire.csv
 
-**参数**：
+参数：
 - `--async`：异步处理模式
 - `--no-resume`：忽略断点，从头开始
 
-**输出**：
+输出：
 - `data/output/scored_results.csv`：打分结果
 - `data/output/scored_results_report.md`：分析报告
 - `data/output/scored_results_quality.json`：质量报告
@@ -76,7 +76,7 @@ python main.py
 
 对 Agent 版本进行评测，计算 Kappa、准确率等指标。
 
-**1. 首次使用（初始化评估数据集）**
+1. 首次使用（初始化评估数据集）**
 
 ```bash
 python evaluate.py --setup --sav-file path/to/your_data.sav
@@ -84,7 +84,7 @@ python evaluate.py --setup --sav-file path/to/your_data.sav
 
 会生成 `data/evaluation/splits/` 下的 dev/test/holdout，以及 `data/production/input/questionnaire.csv`。
 
-**2. 评估指定版本**
+2. 评估指定版本
 
 ```bash
 python evaluate.py --version v1.0
@@ -97,7 +97,7 @@ python evaluate.py --version v1.0 --dataset test --description "baseline"
 python evaluate.py --compare
 ```
 
-**输出**：
+输出：
 - `data/evaluation/results/{version}_detailed.csv`：详细结果
 - `data/evaluation/results/{version}_errors.csv`：错误案例
 - `data/evaluation/results/evaluation_history.json`：评估历史
@@ -139,10 +139,10 @@ python evaluate.py --compare
 
 在 `prompts/scoring_rubric.txt` 中配置：
 
-- **0 分**：只有行为描述，无心理状态
-- **1 分**：描述心理状态，但无错误识别
-- **2 分**：明确人物对物体产生错误识别/信念
-- **999 分**：无效值（如视频无法播放、跳过等）
+- 0 分：只有行为描述，无心理状态
+- 1 分：描述心理状态，但无错误识别
+- 2 分：明确人物对物体产生错误识别/信念
+- 999 分：无效值（如视频无法播放、跳过等）
 
 ---
 
