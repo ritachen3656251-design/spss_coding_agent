@@ -1,5 +1,5 @@
 """
-智能打分 Agent：记忆、规划、决策、行动、反思
+智能打分 Agent：记忆、决策、行动、反思
 """
 import os
 from datetime import datetime
@@ -7,7 +7,6 @@ from datetime import datetime
 from agents.base_agent import BaseAgent
 from agents.case_repository import CaseRepository
 from agents.memory import AgentMemory
-from agents.planner import PlanningAgent
 from tools.keyword_matcher import KeywordMatcher
 from tools.llm_client import LLMClient
 import config
@@ -15,10 +14,9 @@ import config
 
 class ScoringAgent(BaseAgent):
     """
-    智能打分Agent：
+    智能打分 Agent：
     - 记忆：记住之前的决策经验
-    - 规划：为每条数据制定处理计划
-    - 决策：根据计划选择最佳策略
+    - 决策：根据观察选择策略（ReAct 或规则）
     - 行动：执行打分并反思结果
     """
 
@@ -28,7 +26,6 @@ class ScoringAgent(BaseAgent):
         self.scenario = scenario
 
         self.memory = AgentMemory()
-        self.planner = PlanningAgent(self.memory)
         self.case_repo = CaseRepository()
 
         has_deepseek_key = config.DEEPSEEK_API_KEY or os.getenv("OPENAI_API_KEY")
@@ -40,12 +37,6 @@ class ScoringAgent(BaseAgent):
         self.keyword_matcher = (
             KeywordMatcher() if config.ENABLE_KEYWORD_FALLBACK else None
         )
-        if scenario:
-            from agents.context_agent import ContextAgent
-
-            self.context_agent = ContextAgent(scenario)
-        else:
-            self.context_agent = None
 
     def process(self, text: str, respondent_id: str = None) -> dict:
         """
@@ -57,7 +48,7 @@ class ScoringAgent(BaseAgent):
             result = self._react_loop(text)
         else:
             observation = self._observe(text)
-            plan = self.planner.process(text, observation)
+            plan = self._simple_plan(text, observation)
             result = self._execute_plan(text, plan, observation)
 
         reflection = self._reflect(text, result, {"plan": [], "reasoning": ""})
@@ -109,6 +100,72 @@ class ScoringAgent(BaseAgent):
                 self.log(f"✓ 已记录为疑难案例（编号:{respondent_id or 'unknown'}）")
 
         return result
+
+    def _simple_plan(self, text: str, observation: dict) -> dict:
+        """规则规划：LLM 规划简化内联"""
+        plan = []
+        reasoning = []
+
+        if len(text) < 10 and self.scenario:
+            plan.append("use_context")
+            reasoning.append("文本过短，需要情景信息")
+
+        ambiguous_words = ["想", "可能", "好像", "应该"]
+        if any(word in text for word in ambiguous_words):
+            plan.append("prioritize_dual_model")
+            reasoning.append("包含模糊表述，可能需要多模型验证")
+
+        strategy_advice = self.memory.get_strategy_advice()
+        if strategy_advice == "dual_model_recommended":
+            plan.append("prioritize_dual_model")
+            reasoning.append("历史数据显示双模型策略效果好")
+
+        if observation.get("is_boundary"):
+            plan.append("record_to_memory")
+            reasoning.append("边界 case，需记录以改进未来决策")
+
+        if not plan:
+            plan = ["standard_scoring"]
+            reasoning = ["常规打分流程"]
+
+        return {"plan": plan, "reasoning": " → ".join(reasoning)}
+
+    def _check_context_needed(self, answer_text: str) -> dict:
+        """判断是否需要补充情景信息（原 ContextAgent 逻辑）"""
+        if not self.scenario:
+            return {"needs_context": False, "reason": None, "enhanced_prompt": None}
+
+        low_info_signals = [
+            len(answer_text) < 10,
+            answer_text.count("，") == 0 and answer_text.count("。") == 0,
+            not any(
+                kw in answer_text for kw in ["以为", "想", "没发现", "拿", "看"]
+            ),
+        ]
+
+        if any(low_info_signals):
+            enhanced_prompt = f"""
+# 原始情景（帮助你理解背景）
+{self.scenario}
+
+# 被试的回答
+"{answer_text}"
+
+# 评分提示
+这个回答虽然简短，但请结合原始情景判断：
+1. 如果回答暗示了"误以为猫是围巾"这个错误信念 → 2分
+2. 如果只是提到了想法或意图，但没有明确错误信念 → 1分
+3. 如果只是描述物理动作 → 0分
+
+即使回答很短，也要尽量从情景中推断其含义，而不是轻易标记为"信息不足"。
+"""
+            return {
+                "needs_context": True,
+                "reason": "回答信息量较少，需要情景辅助",
+                "enhanced_prompt": enhanced_prompt,
+            }
+
+        return {"needs_context": False, "reason": None, "enhanced_prompt": None}
 
     def _observe(self, text: str) -> dict:
         """观察阶段：分析文本特征"""
@@ -200,7 +257,7 @@ class ScoringAgent(BaseAgent):
         tried_actions = [a for a, _ in state["tried_actions"]]
         available = [
             "standard_scoring",
-            "context_enhanced" if self.context_agent else None,
+            "context_enhanced" if self.scenario else None,
             "dual_model" if self.secondary_client else None,
         ]
         available = [a for a in available if a and a not in tried_actions]
@@ -228,7 +285,7 @@ class ScoringAgent(BaseAgent):
             action = out["data"].get("action", "")
             if action in available:
                 return action
-            if action == "context_enhanced" and self.context_agent:
+            if action == "context_enhanced" and self.scenario:
                 return "context_enhanced"
             if action == "dual_model" and self.secondary_client:
                 return "dual_model"
@@ -236,7 +293,7 @@ class ScoringAgent(BaseAgent):
 
     def _execute_react_action(self, action: str, text: str, state: dict) -> dict:
         """执行 ReAct 行动"""
-        if action == "context_enhanced" and self.context_agent:
+        if action == "context_enhanced" and self.scenario:
             return self._score_with_context(text)
         if action == "dual_model" and self.secondary_client:
             return self._score_with_dual_model_first(text)
@@ -264,7 +321,7 @@ class ScoringAgent(BaseAgent):
         if best_from_history and best_from_history not in effective_plan:
             effective_plan.insert(0, best_from_history)
 
-        if "use_context" in effective_plan and self.context_agent:
+        if "use_context" in effective_plan and self.scenario:
             self.log("执行：使用情景辅助")
             return self._score_with_context(text)
 
@@ -341,10 +398,10 @@ class ScoringAgent(BaseAgent):
 
     def _score_with_context(self, text: str) -> dict:
         """使用情景辅助的打分"""
-        if not self.context_agent:
+        if not self.scenario:
             return self._score_with_primary_model(text)
 
-        context_check = self.context_agent.process(text)
+        context_check = self._check_context_needed(text)
 
         if context_check["needs_context"]:
             enhanced_result = self._score_with_enhanced_prompt(
@@ -420,8 +477,8 @@ class ScoringAgent(BaseAgent):
 
     def _score_with_primary_model(self, text: str) -> dict:
         """使用主模型打分，必要时提供情景"""
-        if self.context_agent:
-            context_check = self.context_agent.process(text)
+        if self.scenario:
+            context_check = self._check_context_needed(text)
             if context_check["needs_context"]:
                 self.log("检测到信息不足，提供情景辅助")
                 user_message = context_check["enhanced_prompt"] + f"\n\n{self.rubric}"

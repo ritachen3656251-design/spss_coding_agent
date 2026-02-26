@@ -22,11 +22,11 @@ class AgentPipeline:
     高置信度与 999 的题目不输出判分理由，只输出分数。
     """
 
-    def __init__(self, rubric: str):
+    def __init__(self, rubric: str, scenario: str = None):
         self.preprocessing_agent = PreprocessingAgent()
-        self.scoring_agent = ScoringAgent(rubric)
+        self.scoring_agent = ScoringAgent(rubric, scenario)
         self.quality_agent = QualityAgent()
-        self.analysis_agent = AnalysisAgent()
+        self.analysis_agent = AnalysisAgent(case_repo=self.scoring_agent.case_repo)
 
     def _read_csv(self, path: str) -> pd.DataFrame:
         """读取 CSV，自动尝试 utf-8-sig 与 gbk 编码。"""
@@ -48,6 +48,8 @@ class AgentPipeline:
         id_col: str = "编号",
         answer_col: str = "回答内容",
         score_col: str = "编码分数",
+        use_async: bool = None,
+        resume: bool = True,
     ) -> pd.DataFrame:
         """
         批量处理 CSV 文件
@@ -55,6 +57,33 @@ class AgentPipeline:
         Raises:
             ValueError: 当必需列不存在或数据为空时
         """
+        if use_async is None:
+            use_async = getattr(config, "USE_ASYNC_PROCESSING", False)
+        if use_async:
+            from tools.async_processor import process_csv_with_async
+            print("⚡ 使用异步处理模式")
+            df = process_csv_with_async(
+                self, input_csv, output_csv,
+                id_col=id_col, answer_col=answer_col, score_col=score_col,
+                resume=resume,
+            )
+            self._generate_reports(df, output_csv, score_col)
+            return df
+
+        return self._process_csv_sync(
+            input_csv, output_csv,
+            id_col=id_col, answer_col=answer_col, score_col=score_col,
+        )
+
+    def _process_csv_sync(
+        self,
+        input_csv: str,
+        output_csv: str,
+        id_col: str = "编号",
+        answer_col: str = "回答内容",
+        score_col: str = "编码分数",
+    ) -> pd.DataFrame:
+        """同步处理逻辑"""
         print("正在读取数据...")
         df = self._read_csv(input_csv)
 
@@ -95,7 +124,9 @@ class AgentPipeline:
                     df.at[idx, "质量标记"] = ""
                     continue
 
-                scoring_result = self.scoring_agent.process(preprocess_result["text"])
+                scoring_result = self.scoring_agent.process(
+                    preprocess_result["text"], respondent_id=row_id
+                )
                 quality_result = self.quality_agent.process(
                     scoring_result, text, row_id
                 )
@@ -122,8 +153,13 @@ class AgentPipeline:
         else:
             print()
 
+        self._generate_reports(df, output_csv, score_col)
+        return df
+
+    def _generate_reports(self, df: pd.DataFrame, output_csv: str, score_col: str):
+        """生成分析报告和质量报告"""
         print("正在生成分析报告...")
-        analysis_result = self.analysis_agent.process(df)
+        analysis_result = self.analysis_agent.process(df, score_col=score_col)
         report_path = output_csv.replace(".csv", "_report.md")
         with open(report_path, "w", encoding="utf-8") as f:
             f.write(analysis_result["report"])
@@ -134,5 +170,3 @@ class AgentPipeline:
         with open(quality_path, "w", encoding="utf-8") as f:
             json.dump(quality_report, f, ensure_ascii=False, indent=2)
         print(f"✓ 质量报告已保存：{quality_path}\n")
-
-        return df

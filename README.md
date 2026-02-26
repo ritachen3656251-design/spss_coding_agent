@@ -1,6 +1,6 @@
 # SPSS Agent System - 智能问卷编码系统
 
-基于多 Agent 的问卷文本智能编码系统，完整流程：SAV → CSV → 预处理 → 智能打分 → 质量检查 → 分析报告。
+基于四 Agent 流水线的问卷文本智能编码系统，完整流程：SAV → CSV → 预处理 → 智能打分 → 质量检查 → 分析报告。
 
 支持 0/1/2/999 四级心理化编码（无心理化、心理状态、错误信念、无效值），适用于心理量表、开放题编码等场景。
 
@@ -110,12 +110,11 @@ python evaluate.py --compare
 ├── main.py              # 生产入口
 ├── evaluate.py          # 评估入口
 ├── config.py            # 项目配置
-├── agents/              # Agent 模块
-│   ├── preprocessing_agent.py
-│   ├── scoring_agent.py
-│   ├── quality_agent.py
-│   ├── analysis_agent.py
-│   └── ...
+├── agents/              # 四类 Agent
+│   ├── preprocessing_agent.py  # 预处理
+│   ├── scoring_agent.py       # 智能打分
+│   ├── quality_agent.py       # 质量检查
+│   └── analysis_agent.py      # 数据分析
 ├── tools/               # 工具
 │   ├── batch_processor.py
 │   ├── data_converter.py

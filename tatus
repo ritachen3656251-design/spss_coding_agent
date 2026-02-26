@@ -1,0 +1,16 @@
+[33mcommit 8c891b573a85fb2d5b3b8bac7f0a5dc95fb6e462[m[33m ([m[1;36mHEAD -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m
+Author: czrrrrrr-rr <1352812611@qq.com>
+Date:   Thu Feb 26 13:25:52 2026 +0800
+
+    final version
+
+ README.md                                       |  38 [32m+++[m[31m---[m
+ .../results/.~lock.v1.1-rubric_errors.csv#      |   1 [32m+[m
+ data/evaluation/split_report.txt                |  57 [32m+++++++++[m
+ data/evaluation/temp/output_v1.0_report.md      |  88 [32m++++++++++++++[m
+ .../temp/output_v1.1-rubric_report.md           | 109 [32m+++++++++++++++++[m
+ data/evaluation/temp/output_v1.1_report.md      |  89 [32m++++++++++++++[m
+ .../temp/output_v1.2-rubric_report.md           | 111 [32m++++++++++++++++++[m
+ data/evaluation/temp/output_v1.2_report.md      | 111 [32m++++++++++++++++++[m
+ prompts/scoring_rubric.txt                      |  16 [32m+[m[31m--[m
+ 9 files changed, 593 insertions(+), 27 deletions(-)
