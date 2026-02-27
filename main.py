@@ -6,7 +6,7 @@ import argparse
 import os
 
 import config
-from agents.scoring_agent import load_rubric
+from agents.scoring_agent import load_rubric, load_scenario
 from tools.batch_processor import AgentPipeline
 from tools.data_converter import find_and_convert_sav_to_questionnaire
 
@@ -58,13 +58,8 @@ def main():
     # 步骤2：加载评分标准和情景
     print("\n📋 步骤2：加载评分标准和情景...")
     rubric = load_rubric(config.RUBRIC_PATH)
-
-    # 加载情景描述（如果存在）
-    scenario_path = "prompts/scenario.txt"
-    scenario = None
-    if os.path.exists(scenario_path):
-        with open(scenario_path, "r", encoding="utf-8") as f:
-            scenario = f.read()
+    scenario = load_scenario()
+    if scenario:
         print(f"✓ 评分标准已加载（{len(rubric)} 字符）")
         print(f"✓ 情景描述已加载（{len(scenario)} 字符）")
     else:

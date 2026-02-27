@@ -113,8 +113,11 @@ class AnalysisAgent(BaseAgent):
 
     def _semantic_analysis(self, df: pd.DataFrame, score_col: str = "编码分数") -> dict:
         """
-        语义分析：找出各分数段的典型特征
+        语义分析：找出各分数段的典型特征（可关闭以省 LLM 成本）
         """
+        if not getattr(config, "ENABLE_SEMANTIC_ANALYSIS", True):
+            return {}
+
         analysis = {}
         if score_col not in df.columns:
             score_col = "AI评分" if "AI评分" in df.columns else "编码分数"

@@ -1,5 +1,6 @@
 """
-智能打分 Agent：记忆、决策、行动、反思
+智能打分 Agent：观察 → 规划 → 选择策略 → 执行 → 反思
+规则驱动的智能体流程，结合记忆与案例库学习
 """
 import os
 from datetime import datetime
@@ -14,10 +15,12 @@ import config
 
 class ScoringAgent(BaseAgent):
     """
-    智能打分 Agent：
-    - 记忆：记住之前的决策经验
-    - 决策：根据观察选择策略（ReAct 或规则）
-    - 行动：执行打分并反思结果
+    智能打分 Agent（规则规划模式）：
+    1. 观察：分析文本特征
+    2. 规划：基于规则生成候选策略及理由
+    3. 选择策略：结合历史经验选出最优策略
+    4. 执行：调用对应打分流程
+    5. 反思：评估决策质量，更新记忆
     """
 
     def __init__(self, rubric: str, scenario: str = None, use_iteration: bool = False):
@@ -35,23 +38,32 @@ class ScoringAgent(BaseAgent):
             else None
         )
         self.keyword_matcher = (
-            KeywordMatcher() if config.ENABLE_KEYWORD_FALLBACK else None
+            KeywordMatcher()         if config.ENABLE_KEYWORD_FALLBACK else None
         )
 
     def process(self, text: str, respondent_id: str = None) -> dict:
         """
-        完整的Agent流程：ReAct 循环或规划流程，集成案例库学习
+        Agent 完整流程：观察 → 规划 → 选择策略 → 执行 → 反思
         """
         self.log(f"开始处理：'{text[:30]}...'")
 
-        if config.ENABLE_REACT:
-            result = self._react_loop(text)
-        else:
-            observation = self._observe(text)
-            plan = self._simple_plan(text, observation)
-            result = self._execute_plan(text, plan, observation)
+        # 1. 观察：分析文本特征
+        observation = self._observe(text)
+        self.log(f"观察：{observation['summary']}")
 
-        reflection = self._reflect(text, result, {"plan": [], "reasoning": ""})
+        # 2. 规划：基于规则生成候选策略
+        plan = self._plan(text, observation)
+        self.log(f"规划：{plan['reasoning']}")
+
+        # 3. 选择策略：结合历史经验确定最终策略
+        strategy = self._select_strategy(text, plan, observation)
+        self.log(f"选择策略：{strategy}")
+
+        # 4. 执行：调用对应打分流程
+        result = self._execute(text, strategy, observation)
+
+        # 5. 反思：评估决策质量
+        reflection = self._reflect(text, result, plan)
         result["reflection"] = reflection
         self.log(f"反思：{reflection['insight']}")
 
@@ -79,7 +91,7 @@ class ScoringAgent(BaseAgent):
                 "score": result.get("score"),
                 "confidence": result.get("confidence", 0),
                 "timestamp": datetime.now().isoformat(),
-                "iteration_count": result.get("iteration_count", 1),
+                "iteration_count": 1,
             }
 
             details = result.get("details", {})
@@ -101,34 +113,74 @@ class ScoringAgent(BaseAgent):
 
         return result
 
-    def _simple_plan(self, text: str, observation: dict) -> dict:
-        """规则规划：LLM 规划简化内联"""
-        plan = []
+    def _plan(self, text: str, observation: dict) -> dict:
+        """
+        规划阶段：基于规则生成候选策略列表及理由
+        返回：{"candidates": [strategy1, strategy2, ...], "reasoning": str}
+        """
+        candidates = []
         reasoning = []
 
+        # 规则1：文本过短且有情景 → 优先情景辅助
         if len(text) < 10 and self.scenario:
-            plan.append("use_context")
+            candidates.append("use_context")
             reasoning.append("文本过短，需要情景信息")
 
+        # 规则2：包含模糊表述 → 考虑双模型验证
         ambiguous_words = ["想", "可能", "好像", "应该"]
         if any(word in text for word in ambiguous_words):
-            plan.append("prioritize_dual_model")
+            if "prioritize_dual_model" not in candidates and self.secondary_client:
+                candidates.append("prioritize_dual_model")
             reasoning.append("包含模糊表述，可能需要多模型验证")
 
+        # 规则3：历史经验建议
         strategy_advice = self.memory.get_strategy_advice()
-        if strategy_advice == "dual_model_recommended":
-            plan.append("prioritize_dual_model")
+        if strategy_advice == "dual_model_recommended" and self.secondary_client:
+            if "prioritize_dual_model" not in candidates:
+                candidates.append("prioritize_dual_model")
             reasoning.append("历史数据显示双模型策略效果好")
 
+        # 规则4：边界 case 标记（供反思阶段使用）
         if observation.get("is_boundary"):
-            plan.append("record_to_memory")
             reasoning.append("边界 case，需记录以改进未来决策")
 
-        if not plan:
-            plan = ["standard_scoring"]
+        # 兜底：至少一个策略
+        if not candidates:
+            candidates = ["standard_scoring"]
             reasoning = ["常规打分流程"]
 
-        return {"plan": plan, "reasoning": " → ".join(reasoning)}
+        return {
+            "candidates": candidates,
+            "reasoning": " → ".join(reasoning),
+            "is_boundary": observation.get("is_boundary", False),
+        }
+
+    def _select_strategy(self, text: str, plan: dict, observation: dict) -> str:
+        """
+        选择策略：结合规划候选与历史经验，选出最终执行的策略
+        优先级：历史相似案例建议 > 规划首位
+        """
+        candidates = plan["candidates"]
+
+        # 检索相似历史经验
+        similar_cases = self.memory.retrieve_similar(text)
+        best_from_history = self.memory.get_best_strategy_from_cases(similar_cases)
+
+        if similar_cases and best_from_history:
+            self.log(f"检索到 {len(similar_cases)} 条相似经验，建议策略：{best_from_history}")
+
+        # 历史建议若在候选列表中，则优先采用
+        history_to_strategy = {
+            "use_context": "use_context",
+            "prioritize_dual_model": "prioritize_dual_model",
+            "standard_scoring": "standard_scoring",
+        }
+        history_strategy = history_to_strategy.get(best_from_history)
+        if history_strategy and history_strategy in candidates:
+            return history_strategy
+
+        # 否则采用规划首位
+        return candidates[0]
 
     def _check_context_needed(self, answer_text: str) -> dict:
         """判断是否需要补充情景信息（原 ContextAgent 逻辑）"""
@@ -183,169 +235,36 @@ class ScoringAgent(BaseAgent):
             "summary": f"长度{len(text)}字，{'包含' if has_kw else '不含'}关键词",
         }
 
-    def _react_loop(self, text: str) -> dict:
-        """ReAct 循环：思考→行动→观察→检查"""
-        max_iter = config.REACT_MAX_ITERATIONS
-        target_conf = config.REACT_CONFIDENCE_TARGET
+    def _execute(self, text: str, strategy: str, observation: dict) -> dict:
+        """
+        执行阶段：根据所选策略调用对应打分流程
+        strategy: use_context | prioritize_dual_model | standard_scoring
+        """
+        if strategy == "use_context" and self.scenario:
+            self.log("执行：情景辅助打分")
+            return self._score_with_context(text, observation)
 
-        observation = self._observe(text)
-        similar_cases = self.memory.retrieve_similar(text)
-        best_from_history = self.memory.get_best_strategy_from_cases(similar_cases)
-        if similar_cases and best_from_history:
-            self.log(f"检索到 {len(similar_cases)} 条相似经验，建议策略：{best_from_history}")
+        if strategy == "prioritize_dual_model" and self.secondary_client:
+            self.log("执行：双模型验证")
+            return self._score_with_dual_model_first(text, observation)
 
-        state = {
-            "text": text,
-            "observation": observation,
-            "tried_actions": [],
-            "last_result": None,
-            "similar_cases": similar_cases,
-            "best_from_history": best_from_history,
-        }
+        # standard_scoring 或策略不可用时
+        self.log("执行：标准打分")
+        primary_result = self._score_with_primary_model(text, observation)
 
-        for i in range(max_iter):
-            self.log(f"ReAct 第 {i + 1}/{max_iter} 轮")
+        if primary_result["confidence"] < config.CONFIDENCE_THRESHOLD:
+            self.log("置信度低，启动边界 case 多策略验证")
+            return self._handle_boundary_case(text, primary_result)
 
-            thought = self._react_think(state)
-            self.log(f"思考：{thought[:80]}...")
-
-            action = self._react_decide_action(thought, state)
-            if not action:
-                action = "standard_scoring"
-            self.log(f"行动：{action}")
-
-            result = self._execute_react_action(action, text, state)
-            state["last_result"] = result
-            state["tried_actions"].append((action, result))
-
-            if result.get("confidence", 0) >= target_conf:
-                self.log(f"置信度达 {result['confidence']:.2f}，结束循环")
-                result["iteration_count"] = len(state["tried_actions"])
-                return result
-
-        best = max(
-            state["tried_actions"],
-            key=lambda x: x[1].get("confidence", 0) if x[1] else 0,
-        )
-        best[1]["iteration_count"] = len(state["tried_actions"])
-        return best[1]
-
-    def _react_think(self, state: dict) -> str:
-        """Thought：分析当前状态"""
-        obs = state["observation"]
-        tried = state["tried_actions"]
-        last = state.get("last_result")
-
-        history = ""
-        if tried:
-            history = "已尝试：" + "；".join(
-                f"{a}→置信度{r.get('confidence', 0):.2f}"
-                for a, r in tried
-            )
-
-        system = "你是问卷编码决策专家。请简短分析当前状态并思考下一步策略。"
-        user = f"""文本观察：{obs['summary']}
-{history if history else "首次尝试"}
-{f"上次结果：分数={last.get('score')}，置信度={last.get('confidence', 0):.2f}" if last else ""}
-
-请用1-2句话分析，应选择哪种策略。"""
-        out = self.llm_client.call(system, user, max_tokens=150)
-        return out.get("response", "") if out.get("success") else ""
-
-    def _react_decide_action(self, thought: str, state: dict) -> str | None:
-        """Act：决定下一步行动"""
-        tried_actions = [a for a, _ in state["tried_actions"]]
-        available = [
-            "standard_scoring",
-            "context_enhanced" if self.scenario else None,
-            "dual_model" if self.secondary_client else None,
-        ]
-        available = [a for a in available if a and a not in tried_actions]
-
-        if not available:
-            return "standard_scoring"
-
-        best_from_history = state.get("best_from_history")
-        history_to_action = {
-            "use_context": "context_enhanced",
-            "prioritize_dual_model": "dual_model",
-            "standard_scoring": "standard_scoring",
-        }
-        history_action = history_to_action.get(best_from_history) if best_from_history else None
-        if history_action and history_action in available:
-            self.log(f"历史经验提示使用：{history_action}")
-            return history_action
-
-        system = """你输出一个 JSON，只包含 action 字段。
-可选 action：standard_scoring（标准打分）、context_enhanced（情景辅助）、dual_model（双模型验证）
-选择最合适的，且不要重复已尝试的。"""
-        user = f"思考：{thought}\n已尝试：{tried_actions}\n可选：{available}\n输出：{{\"action\": \"xxx\"}}"
-        out = self.call_llm_with_json(system, user)
-        if out.get("success") and out.get("data"):
-            action = out["data"].get("action", "")
-            if action in available:
-                return action
-            if action == "context_enhanced" and self.scenario:
-                return "context_enhanced"
-            if action == "dual_model" and self.secondary_client:
-                return "dual_model"
-        return available[0]
-
-    def _execute_react_action(self, action: str, text: str, state: dict) -> dict:
-        """执行 ReAct 行动"""
-        if action == "context_enhanced" and self.scenario:
-            return self._score_with_context(text)
-        if action == "dual_model" and self.secondary_client:
-            return self._score_with_dual_model_first(text)
-        primary = self._score_with_primary_model(text)
-        if primary["confidence"] < config.CONFIDENCE_THRESHOLD:
-            return self._handle_boundary_case(text, primary)
         return {
-            "score": primary["score"],
-            "confidence": primary["confidence"],
-            "reasoning": primary.get("reasoning", ""),
+            "score": primary_result["score"],
+            "confidence": primary_result["confidence"],
+            "reasoning": primary_result.get("reasoning", ""),
             "strategy": "primary",
-            "details": {"primary": primary},
+            "details": {"primary": primary_result},
         }
 
-    def _execute_plan(self, text: str, plan: dict, observation: dict) -> dict:
-        """执行计划：根据规划选择策略，优先采纳相似历史经验"""
-        similar_cases = self.memory.retrieve_similar(text)
-        best_from_history = self.memory.get_best_strategy_from_cases(similar_cases)
-
-        if similar_cases and best_from_history:
-            self.log(f"检索到 {len(similar_cases)} 条相似经验，建议策略：{best_from_history}")
-
-        # 历史经验优先：若相似案例指向明确策略且具备能力，则采用
-        effective_plan = list(plan["plan"])
-        if best_from_history and best_from_history not in effective_plan:
-            effective_plan.insert(0, best_from_history)
-
-        if "use_context" in effective_plan and self.scenario:
-            self.log("执行：使用情景辅助")
-            return self._score_with_context(text)
-
-        elif "prioritize_dual_model" in effective_plan and self.secondary_client:
-            self.log("执行：优先使用双模型验证")
-            return self._score_with_dual_model_first(text)
-
-        else:
-            self.log("执行：标准打分流程")
-            primary_result = self._score_with_primary_model(text)
-
-            if primary_result["confidence"] < config.CONFIDENCE_THRESHOLD:
-                self.log("决策：置信度低，启动多策略验证")
-                return self._handle_boundary_case(text, primary_result)
-            else:
-                return {
-                    "score": primary_result["score"],
-                    "confidence": primary_result["confidence"],
-                    "reasoning": "",
-                    "strategy": "primary",
-                    "details": {"primary": primary_result},
-                }
-
-    def _reflect(self, text: str, result: dict, plan: dict) -> dict:
+    def _reflect(self, text: str, result: dict, plan: dict = None) -> dict:
         """反思阶段：评估决策质量"""
         confidence = result.get("confidence", 0.0)
         if confidence < 0.5:
@@ -373,8 +292,11 @@ class ScoringAgent(BaseAgent):
         return {"insight": insight, "should_remember": should_remember}
 
     def _should_record_as_difficult(self, result: dict) -> bool:
-        """判断是否应该记录为疑难案例"""
-        if result.get("confidence", 1) < 0.7:
+        """判断是否应该记录为疑难案例（收紧条件，避免案例库膨胀）"""
+        confidence = result.get("confidence", 1)
+        score = result.get("score")
+
+        if confidence < config.CONFIDENCE_THRESHOLD:
             return True
 
         if "details" in result and "secondary" in result["details"]:
@@ -383,10 +305,11 @@ class ScoringAgent(BaseAgent):
             if primary_score != secondary_score:
                 return True
 
-        if result.get("iteration_count", 1) > 1:
-            return True
-
-        if result.get("score") == 1:
+        if (
+            config.RECORD_SCORE1_AS_DIFFICULT
+            and score == 1
+            and confidence < config.RECORD_SCORE1_CONFIDENCE_MAX
+        ):
             return True
 
         return False
@@ -396,22 +319,23 @@ class ScoringAgent(BaseAgent):
         self.case_repo.save_cases()
         self.log("✓ 知识库已保存")
 
-    def _score_with_context(self, text: str) -> dict:
+    def _score_with_context(self, text: str, observation: dict = None) -> dict:
         """使用情景辅助的打分"""
         if not self.scenario:
-            return self._score_with_primary_model(text)
+            return self._score_with_primary_model(text, observation)
 
         context_check = self._check_context_needed(text)
 
         if context_check["needs_context"]:
+            rubric = self.rubric
             enhanced_result = self._score_with_enhanced_prompt(
-                text, context_check["enhanced_prompt"]
+                text, context_check["enhanced_prompt"], rubric
             )
             enhanced_result["strategy"] = "context_enhanced"
             enhanced_result["details"] = {"primary": enhanced_result.copy()}
             return enhanced_result
         else:
-            primary_result = self._score_with_primary_model(text)
+            primary_result = self._score_with_primary_model(text, observation)
             return {
                 "score": primary_result["score"],
                 "confidence": primary_result["confidence"],
@@ -420,20 +344,13 @@ class ScoringAgent(BaseAgent):
                 "details": {"primary": primary_result},
             }
 
-    def _score_with_enhanced_prompt(self, text: str, enhanced_prompt: str) -> dict:
-        """使用增强提示词打分"""
-        user_message = enhanced_prompt + f"\n\n{self.rubric}"
-        system_prompt = """你是严格的心理学问卷编码专家。
-
-你必须输出JSON格式：
-{
-    "score": 0/1/2,
-    "confidence": 0.0-1.0,
-    "reasoning": "判分理由",
-    "key_evidence": ["支持该分数的关键证据"]
-}
-
-只返回JSON，不要其他文字。"""
+    def _score_with_enhanced_prompt(
+        self, text: str, enhanced_prompt: str, rubric: str = None
+    ) -> dict:
+        """使用增强提示词打分（情景辅助）"""
+        rubric = rubric or self.rubric
+        user_message = enhanced_prompt + f"\n\n# 评分标准\n{rubric}"
+        system_prompt = self._build_system_prompt()
         result = self.call_llm_with_json(system_prompt, user_message)
         if not result["success"]:
             return {
@@ -444,10 +361,10 @@ class ScoringAgent(BaseAgent):
             }
         return result["data"]
 
-    def _score_with_dual_model_first(self, text: str) -> dict:
+    def _score_with_dual_model_first(self, text: str, observation: dict = None) -> dict:
         """优先使用双模型的策略"""
-        primary_result = self._score_with_primary_model(text)
-        secondary_result = self._score_with_secondary_model(text)
+        primary_result = self._score_with_primary_model(text, observation)
+        secondary_result = self._score_with_secondary_model(text, observation)
 
         if primary_result["score"] == secondary_result["score"]:
             return {
@@ -475,31 +392,9 @@ class ScoringAgent(BaseAgent):
                     "details": {"primary": primary_result, "secondary": secondary_result},
                 }
 
-    def _score_with_primary_model(self, text: str) -> dict:
-        """使用主模型打分，必要时提供情景"""
-        if self.scenario:
-            context_check = self._check_context_needed(text)
-            if context_check["needs_context"]:
-                self.log("检测到信息不足，提供情景辅助")
-                user_message = context_check["enhanced_prompt"] + f"\n\n{self.rubric}"
-            else:
-                user_message = f"""# 评分标准
-{self.rubric}
-
-# 待评分回答
-"{text}"
-
-请评分并说明你的置信度。"""
-        else:
-            user_message = f"""# 评分标准
-{self.rubric}
-
-# 待评分回答
-"{text}"
-
-请评分并说明你的置信度。"""
-
-        system_prompt = """你是严格的心理学问卷编码专家。
+    def _build_system_prompt(self) -> str:
+        """构建系统提示词（保持与高 Kappa 时期一致）"""
+        return """你是严格的心理学问卷编码专家。
 
 你必须输出JSON格式：
 {
@@ -520,6 +415,32 @@ confidence说明：
 
 只返回JSON，不要其他文字。"""
 
+    def _score_with_primary_model(self, text: str, observation: dict = None) -> dict:
+        """使用主模型打分，必要时提供情景"""
+        rubric = self.rubric
+        if self.scenario:
+            context_check = self._check_context_needed(text)
+            if context_check["needs_context"]:
+                self.log("检测到信息不足，提供情景辅助")
+                user_message = context_check["enhanced_prompt"] + f"\n\n# 评分标准\n{rubric}"
+            else:
+                user_message = f"""# 评分标准
+{rubric}
+
+# 待评分回答
+"{text}"
+
+请评分并说明你的置信度。"""
+        else:
+            user_message = f"""# 评分标准
+{rubric}
+
+# 待评分回答
+"{text}"
+
+请评分并说明你的置信度。"""
+
+        system_prompt = self._build_system_prompt()
         result = self.call_llm_with_json(system_prompt, user_message)
 
         if not result["success"]:
@@ -582,13 +503,22 @@ confidence说明：
             "needs_human_review": True,
         }
 
-    def _score_with_secondary_model(self, text: str) -> dict:
+    def _score_with_secondary_model(self, text: str, observation: dict = None) -> dict:
         """使用第二模型（DeepSeek）打分"""
         original_client = self.llm_client
         self.llm_client = self.secondary_client
-        result = self._score_with_primary_model(text)
+        result = self._score_with_primary_model(text, observation)
         self.llm_client = original_client
         return result
+
+
+def load_scenario(scenario_dir: str = "prompts") -> str | None:
+    """加载情景描述（scenario.txt）"""
+    txt_path = os.path.join(scenario_dir, "scenario.txt")
+    if os.path.exists(txt_path):
+        with open(txt_path, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    return None
 
 
 def load_rubric(file_path: str = "prompts/scoring_rubric.txt") -> str:

@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import config
-from agents.scoring_agent import load_rubric
+from agents.scoring_agent import load_rubric, load_scenario
 from tools.batch_processor import AgentPipeline
 from tools.evaluation.data_manager import EvaluationDataManager
 from tools.evaluation.evaluator import AgentEvaluator
@@ -155,11 +155,7 @@ def evaluate_version(version: str, description: str, dataset: str):
         print(f"\n✓ 运行Agent打分（{version}）...\n")
 
         rubric = load_rubric(config.RUBRIC_PATH)
-        scenario = None
-        scenario_path = "prompts/scenario.txt"
-        if os.path.exists(scenario_path):
-            with open(scenario_path, "r", encoding="utf-8") as f:
-                scenario = f.read()
+        scenario = load_scenario()
 
         pipeline = AgentPipeline(rubric, scenario)
 

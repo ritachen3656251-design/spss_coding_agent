@@ -8,7 +8,7 @@ import sys
 sys.path.insert(0, ".")  # 添加项目根目录到路径
 
 import config
-from agents.scoring_agent import load_rubric
+from agents.scoring_agent import load_rubric, load_scenario
 from tools.batch_processor import AgentPipeline
 from tools.evaluation.data_manager import EvaluationDataManager
 from tools.evaluation.evaluator import AgentEvaluator
@@ -77,13 +77,8 @@ def main():
 
     # 加载评分标准和情景
     rubric = load_rubric(config.RUBRIC_PATH)
-    scenario = None
-    scenario_path = "prompts/scenario.txt"
-    if os.path.exists(scenario_path):
-        with open(scenario_path, "r", encoding="utf-8") as f:
-            scenario = f.read()
+    scenario = load_scenario()
 
-    # 运行Agent
     pipeline = AgentPipeline(rubric, scenario)
 
     result_df = pipeline.process_csv(

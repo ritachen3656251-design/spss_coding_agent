@@ -36,13 +36,13 @@ class EvaluationDataManager:
             with open(self.config_file, "r", encoding="utf-8") as f:
                 return json.load(f)
 
-        # 默认配置
+        # 默认配置（推荐比例 15% : 30% : 55%，按 0/1/2 分层）
         return {
             "created_at": datetime.now().isoformat(),
             "splits": {
-                "dev": 50,  # 开发集：快速迭代测试
-                "test": 100,  # 测试集：最终评估
-                "holdout": 250,  # 保留集：训练/优化用
+                "dev": 15,  # 开发集：快速迭代
+                "test": 30,  # 测试集：最终评估
+                "holdout": 55,  # 保留集：预留验证
             },
             "split_seed": 42,
             "split_done": False,
@@ -214,7 +214,8 @@ class EvaluationDataManager:
         """
         if self.config["split_done"]:
             print(
-                "⚠️  数据集已分割，如需重新分割请删除 dataset_config.json"
+                "⚠️  数据集已分割。如需重新划分比例，请运行：\n"
+                "   python scripts/resplit_evaluation.py"
             )
             return
 
@@ -388,6 +389,88 @@ class EvaluationDataManager:
         print(f"    - {report_path}")
         print()
 
+    def resplit_from_labeled(self, splits: dict = None):
+        """
+        基于已有 ground_truth.csv 重新划分 dev/test/holdout
+
+        用于更新划分比例，无需重新读取 SAV 文件。
+
+        参数：
+        - splits: 可选，{"dev": 15, "test": 30, "holdout": 55}，默认用推荐比例
+        """
+        labeled_path = os.path.join(self.labeled_dir, "ground_truth.csv")
+        if not os.path.exists(labeled_path):
+            raise FileNotFoundError(
+                f"未找到已标注数据：{labeled_path}\n"
+                "请先运行 python scripts/setup_evaluation.py <sav文件>"
+            )
+
+        recommended = {"dev": 15, "test": 30, "holdout": 55}
+        self.config["splits"] = splits if splits else recommended
+        labeled_df = pd.read_csv(labeled_path, encoding="utf-8-sig")
+
+        required_cols = ["编号", "回答内容", "人工评分"]
+        for c in required_cols:
+            if c not in labeled_df.columns:
+                raise ValueError(f"ground_truth.csv 缺少列：{c}")
+
+        n_labeled = len(labeled_df)
+        min_required = 50
+        if n_labeled < min_required:
+            raise ValueError(
+                f"已标注数据不足{min_required}条（当前{n_labeled}条），无法分割"
+            )
+
+        print("=" * 60)
+        print("✓ 重新划分评估数据集")
+        print("=" * 60)
+        print(f"  比例：dev {self.config['splits']['dev']}% : "
+              f"test {self.config['splits']['test']}% : "
+              f"holdout {self.config['splits']['holdout']}%")
+        print(f"  数据源：{labeled_path} ({n_labeled}条)\n")
+
+        np.random.seed(self.config["split_seed"])
+        dev_df, test_df, holdout_df = self._stratified_split(
+            labeled_df, self.config["splits"]
+        )
+
+        dev_df.to_csv(
+            os.path.join(self.splits_dir, "dev_set.csv"),
+            index=False, encoding="utf-8-sig",
+        )
+        test_df.to_csv(
+            os.path.join(self.splits_dir, "test_set.csv"),
+            index=False, encoding="utf-8-sig",
+        )
+        holdout_df.to_csv(
+            os.path.join(self.splits_dir, "holdout_set.csv"),
+            index=False, encoding="utf-8-sig",
+        )
+
+        unlabeled_path = "data/production/input/questionnaire.csv"
+        unlabeled_df = pd.DataFrame()
+        if os.path.exists(unlabeled_path):
+            unlabeled_df = pd.read_csv(unlabeled_path, encoding="utf-8-sig")
+
+        report = self._generate_split_report(
+            dev_df, test_df, holdout_df,
+            unlabeled_df, n_labeled,
+        )
+        report_path = os.path.join(self.data_dir, "split_report.txt")
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write(report)
+
+        self.config["split_done"] = True
+        self.config["split_date"] = datetime.now().isoformat()
+        self.config["total_labeled"] = n_labeled
+        with open(self.config_file, "w", encoding="utf-8") as f:
+            json.dump(self.config, f, ensure_ascii=False, indent=2)
+
+        print(f"  ✓ 开发集：{len(dev_df)}条")
+        print(f"  ✓ 测试集：{len(test_df)}条")
+        print(f"  ✓ 保留集：{len(holdout_df)}条")
+        print(f"\n✅ 重新划分完成！报告已更新：{report_path}\n")
+
     def _stratified_split(
         self, df: pd.DataFrame, splits: dict
     ) -> tuple:
@@ -396,7 +479,7 @@ class EvaluationDataManager:
 
         参数：
         - df: 已标注数据
-        - splits: {"dev": 100, "test": 200, "holdout": 500}
+        - splits: {"dev": 15, "test": 30, "holdout": 55}  # 比例权重，和为100
 
         返回：(dev_df, test_df, holdout_df)
         """
@@ -412,19 +495,21 @@ class EvaluationDataManager:
                 pd.DataFrame(),
             )
 
+        split_sum = splits["dev"] + splits["test"] + splits["holdout"]
+
         for score in df["人工评分"].unique():
             if score == 999:
                 continue
 
             score_df = df[df["人工评分"] == score].copy()
             score_df = score_df.sample(
-                frac=1, random_state=42
+                frac=1, random_state=self.config["split_seed"]
             ).reset_index(drop=True)
 
             n_total = len(score_df)
 
-            n_dev = max(1, int(n_total * (splits["dev"] / total)))
-            n_test = max(1, int(n_total * (splits["test"] / total)))
+            n_dev = max(1, int(n_total * splits["dev"] / split_sum))
+            n_test = max(1, int(n_total * splits["test"] / split_sum))
 
             n_dev = min(n_dev, n_total)
             n_test = min(n_test, n_total - n_dev)
@@ -489,7 +574,7 @@ class EvaluationDataManager:
 ⚠️  **重要**：测试集仅用于最终报告
 
 ### 3. 保留集 (Holdout Set) - {len(holdout_df)}条
-**用途**：规则学习、标准优化
+**用途**：预留验证、二次确认
 **分数分布**：{score_dist(holdout_df)}
 **文件**：`data/evaluation/splits/holdout_set.csv`
 

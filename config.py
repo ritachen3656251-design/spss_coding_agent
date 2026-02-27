@@ -15,16 +15,23 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")  # 可选，用于双模型验�
 PRIMARY_MODEL = os.getenv("PRIMARY_MODEL", "qwen-max")  # 主模型
 SECONDARY_MODEL = os.getenv("SECONDARY_MODEL", "deepseek-chat")  # 用于边界 case 的第二意见
 
-# DeepSeek API 端点（OpenAI 兼容）
+# DeepSeek API 端点
 DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com")
 
 # Agent行为配置
-CONFIDENCE_THRESHOLD = 0.7  # 低于此置信度触发二次验证
+CONFIDENCE_THRESHOLD = 0.65  # 低于此置信度触发二次验证
+MEMORY_SUCCESS_THRESHOLD = 0.65  # 记忆系统中判定策略"成功"的置信度阈值
 ENABLE_DUAL_MODEL = True  # 是否启用双模型验证
 ENABLE_KEYWORD_FALLBACK = True  # 是否启用关键词回退策略
-ENABLE_REACT = True  # 是否启用 ReAct 循环（思考→行动→观察→检查）
-REACT_CONFIDENCE_TARGET = 0.8  # ReAct 循环满意阈值
-REACT_MAX_ITERATIONS = 3  # ReAct 最大迭代次数
+
+# 疑难案例记录：仅当 1 分且（低置信度或双模型冲突）时记录，避免所有 1 分都入库
+RECORD_SCORE1_AS_DIFFICULT = True  # 是否将不确定的 1 分记入疑难案例
+RECORD_SCORE1_CONFIDENCE_MAX = 0.7  # 1 分置信度低于此才可能记录
+
+# 分析报告：是否调用 LLM 做语义分析（可关闭以省成本）
+ENABLE_SEMANTIC_ANALYSIS = (
+    os.getenv("ENABLE_SEMANTIC_ANALYSIS", "true").lower() == "true"
+)
 # 异步处理配置
 USE_ASYNC_PROCESSING = (
     os.getenv("USE_ASYNC_PROCESSING", "false").lower() == "true"

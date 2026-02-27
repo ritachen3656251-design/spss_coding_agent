@@ -11,7 +11,7 @@
 - 多 Agent 流水线：预处理 → 打分 → 质量检查 → 分析，全流程自动化
 - 双模型验证：主模型 Qwen + 辅助模型 DeepSeek，低置信度时自动二次验证
 - 关键词回退：对「无法播放」「看不了」等表述自动判为 999
-- ReAct 循环：打分 Agent 支持思考→行动→观察→检查，提升推理质量
+- 规则规划智能体：打分 Agent 采用观察→规划→选择策略→执行→反思 五步流程
 - 断点续传：支持中断后从断点继续处理
 - 评估体系：dev/test/holdout 划分，Kappa、准确率、混淆矩阵等指标
 
@@ -43,7 +43,10 @@ DEEPSEEK_API_KEY=your-deepseek-key        # 双模型验证（可选）
 # 可选覆盖
 # PRIMARY_MODEL=qwen-max
 # SECONDARY_MODEL=deepseek-chat
+# ENABLE_SEMANTIC_ANALYSIS=false           # 关闭分析报告语义分析可省 LLM 成本
 ```
+
+更多配置见 `config.py`：置信度阈值、疑难案例记录条件、语义分析开关等。
 
 ---
 
@@ -120,8 +123,8 @@ python evaluate.py --compare
 │   ├── data_converter.py
 │   └── evaluation/      # 评估相关
 ├── prompts/             # 提示词与标准
-│   ├── scoring_rubric.txt
-│   └── scenario.txt
+│   ├── scoring_rubric.txt   # 评分标准（含 Few-shot）
+│   └── scenario.txt         # 情景描述
 ├── data/
 │   ├── input/           # 生产输入（questionnaire.csv 或 .sav）
 │   ├── output/          # 生产输出
@@ -151,6 +154,19 @@ python evaluate.py --compare
 2. 运行 `python main.py`
 3. 查看 `data/output/` 下的 CSV、报告和质量 JSON
 4. 含 `NEEDS_REVIEW` 的条目需人工复核
+
+---
+
+## A/B 实验：置信度阈值
+
+对比不同置信度阈值 (0.6–0.8) 对 Kappa、准确率、双模型触发率的影响：
+
+```bash
+python scripts/ab_test_confidence.py --dataset dev
+# 或指定阈值：python scripts/ab_test_confidence.py --thresholds 0.6,0.7,0.8
+```
+
+根据输出选择最适合的 `CONFIDENCE_THRESHOLD`。
 
 ---
 

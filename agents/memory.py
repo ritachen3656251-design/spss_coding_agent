@@ -3,6 +3,8 @@ import os
 from collections import Counter
 from difflib import SequenceMatcher
 
+import config
+
 # 历史策略 → 执行层 plan key（用于相似经验检索后的决策）
 STRATEGY_TO_PLAN_KEY = {
     "primary": "standard_scoring",
@@ -73,6 +75,11 @@ class AgentMemory:
         perf_key = STRATEGY_TO_PERF_KEY.get(strategy, strategy)
         if perf_key and perf_key in self.short_term["strategy_performance"]:
             self.short_term["strategy_performance"][perf_key]["count"] += 1
+            success_threshold = getattr(
+                config, "MEMORY_SUCCESS_THRESHOLD", 0.7
+            )
+            if confidence >= success_threshold and score is not None:
+                self.short_term["strategy_performance"][perf_key]["success"] += 1
 
         if confidence < 0.6:
             self.short_term["difficult_cases"].append(
@@ -96,17 +103,27 @@ class AgentMemory:
         self.long_term["experience_cases"] = cases[-500:]
 
     def retrieve_similar(self, text: str, top_k: int = 5) -> list:
-        """检索与当前文本相似的历史经验"""
+        """检索与当前文本相似的历史经验，结合序列相似度与关键词重叠"""
         cases = self.long_term.get("experience_cases", [])
         if not cases:
             return []
 
-        def similarity(a: str, b: str) -> float:
-            return SequenceMatcher(None, a, b).ratio()
+        keywords = ["以为", "没发现", "想", "拿", "看", "误以为", "认错"]
+        text_slice = text[:100]
 
-        scored = [(c, similarity(text[:100], c.get("text", ""))) for c in cases]
+        def similarity(a: str, b: str) -> float:
+            base = SequenceMatcher(None, a, b).ratio()
+            kw_a = {w for w in keywords if w in a}
+            kw_b = {w for w in keywords if w in b}
+            overlap = len(kw_a & kw_b) / max(len(kw_a | kw_b), 1)
+            return min(1.0, base + overlap * 0.2)
+
+        scored = [
+            (c, similarity(text_slice, c.get("text", "")[:100]))
+            for c in cases
+        ]
         scored.sort(key=lambda x: x[1], reverse=True)
-        return [c for c, s in scored[:top_k] if s > 0.3]
+        return [c for c, s in scored[:top_k] if s > 0.25]
 
     def get_best_strategy_from_cases(self, cases: list) -> str | None:
         """从相似案例中选出最常见的有效策略，返回执行层 plan key"""
